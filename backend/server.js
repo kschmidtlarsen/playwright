@@ -24,7 +24,8 @@ const PROJECT_PORTS = {
   'rental': 3002,
   'crossfit-repo': 3000,
   'ical-adjuster': 3020,
-  'kanban': 3010
+  'kanban': 3010,
+  'test-dashboard': 3030
 };
 
 // Display names
@@ -32,7 +33,8 @@ const PROJECT_NAMES = {
   'rental': 'Rental Platform',
   'crossfit-repo': 'CrossFit Generator',
   'ical-adjuster': 'iCal Adjuster',
-  'kanban': 'Kanban Board'
+  'kanban': 'Kanban Board',
+  'test-dashboard': 'Test Dashboard'
 };
 
 // Results storage directory
