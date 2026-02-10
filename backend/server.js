@@ -7,8 +7,12 @@ const { spawn } = require('child_process');
 const app = express();
 const PORT = process.env.PORT || 3030;
 
+// Security: Disable X-Powered-By header to hide Express version
+app.disable('x-powered-by');
+
 // Middleware
-app.use(cors());
+// CORS is safe here - internal dashboard for test results
+app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../frontend/public')));
 
@@ -37,6 +41,7 @@ const RESULTS_DIR = path.join(__dirname, 'results');
 // Security: Validate projectId to prevent path traversal
 function isValidProjectId(projectId) {
   // Only allow alphanumeric, dash, and underscore
+  if (!projectId || typeof projectId !== 'string') return false;
   return /^[a-zA-Z0-9_-]+$/.test(projectId);
 }
 
@@ -46,6 +51,25 @@ function sanitizeGrep(grep) {
   // Only allow alphanumeric, spaces, @, and common test tag characters
   const sanitized = grep.replace(/[^a-zA-Z0-9\s@_-]/g, '');
   return sanitized.length > 0 && sanitized.length <= 100 ? sanitized : null;
+}
+
+// Helper: Validate projectId and get project config (reduces duplication)
+async function validateAndGetProject(projectId) {
+  if (!isValidProjectId(projectId)) {
+    return { error: 'Invalid project ID', status: 400 };
+  }
+  const projects = await discoverProjects();
+  if (!projects[projectId]) {
+    return { error: 'Project not found', status: 404 };
+  }
+  return { project: projects[projectId], projects };
+}
+
+// Helper: Read project results file (reduces duplication)
+async function readProjectResults(projectId) {
+  const resultsFile = path.join(RESULTS_DIR, `${projectId}.json`);
+  const data = await fs.readFile(resultsFile, 'utf-8');
+  return JSON.parse(data);
 }
 
 // Ensure results directory exists
@@ -110,22 +134,14 @@ app.get('/api/projects', async (req, res) => {
 // Get test results for a project
 app.get('/api/results/:projectId', async (req, res) => {
   const { projectId } = req.params;
-
-  // Security: Validate projectId to prevent path traversal
-  if (!isValidProjectId(projectId)) {
-    return res.status(400).json({ error: 'Invalid project ID' });
-  }
-
-  // Security: Verify project exists in discovered projects
-  const projects = await discoverProjects();
-  if (!projects[projectId]) {
-    return res.status(404).json({ error: 'Project not found' });
+  const validation = await validateAndGetProject(projectId);
+  if (validation.error) {
+    return res.status(validation.status).json({ error: validation.error });
   }
 
   try {
-    const resultsFile = path.join(RESULTS_DIR, `${projectId}.json`);
-    const data = await fs.readFile(resultsFile, 'utf-8');
-    res.json(JSON.parse(data));
+    const data = await readProjectResults(projectId);
+    res.json(data);
   } catch (err) {
     res.json({ runs: [], lastRun: null });
   }
@@ -173,25 +189,16 @@ app.post('/api/run/:projectId', async (req, res) => {
   const { projectId } = req.params;
   const { grep } = req.body;
 
-  // Security: Validate projectId
-  if (!isValidProjectId(projectId)) {
-    return res.status(400).json({ error: 'Invalid project ID' });
+  const validation = await validateAndGetProject(projectId);
+  if (validation.error) {
+    return res.status(validation.status).json({ error: validation.error });
   }
 
-  const projects = await discoverProjects();
-  const config = projects[projectId];
-
-  if (!config) {
-    return res.status(404).json({ error: 'Project not found' });
-  }
-
-  // Security: Sanitize grep parameter
   const safeGrep = sanitizeGrep(grep);
-
   res.json({ message: 'Tests started', projectId });
 
   // Run tests in background
-  runTestsForProject(projectId, config, safeGrep).catch(err => {
+  runTestsForProject(projectId, validation.project, safeGrep).catch(err => {
     console.error(`Error running tests for ${projectId}:`, err);
   });
 });
@@ -258,10 +265,12 @@ async function runTestsForProject(projectId, config, grep) {
   // Parse JSON output
   let results;
   try {
-    // Find JSON in output (might have other text around it)
-    const jsonMatch = stdout.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      results = JSON.parse(jsonMatch[0]);
+    // Find JSON in output using indexOf (safe from ReDoS)
+    const jsonStart = stdout.indexOf('{');
+    if (jsonStart !== -1) {
+      // Try to parse from the first { to the end
+      const jsonCandidate = stdout.substring(jsonStart);
+      results = JSON.parse(jsonCandidate);
     } else {
       throw new Error('No JSON found in output');
     }
@@ -342,23 +351,14 @@ async function runTestsForProject(projectId, config, grep) {
 // Get test run history for a project
 app.get('/api/history/:projectId', async (req, res) => {
   const { projectId } = req.params;
-
-  // Security: Validate projectId to prevent path traversal
-  if (!isValidProjectId(projectId)) {
-    return res.status(400).json({ error: 'Invalid project ID' });
-  }
-
-  // Security: Verify project exists in discovered projects
-  const projects = await discoverProjects();
-  if (!projects[projectId]) {
-    return res.status(404).json({ error: 'Project not found' });
+  const validation = await validateAndGetProject(projectId);
+  if (validation.error) {
+    return res.status(validation.status).json({ error: validation.error });
   }
 
   try {
-    const resultsFile = path.join(RESULTS_DIR, `${projectId}.json`);
-    const data = await fs.readFile(resultsFile, 'utf-8');
-    const parsed = JSON.parse(data);
-    res.json(parsed.runs || []);
+    const data = await readProjectResults(projectId);
+    res.json(data.runs || []);
   } catch (err) {
     res.json([]);
   }
@@ -369,12 +369,26 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../frontend/public/index.html'));
 });
 
-app.listen(PORT, () => {
-  console.log(`Test Dashboard running on http://localhost:${PORT}`);
-  ensureResultsDir();
+// Start server only if run directly (not imported for testing)
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Test Dashboard running on http://localhost:${PORT}`);
+    ensureResultsDir();
 
-  // Log discovered projects on startup
-  discoverProjects().then(projects => {
-    console.log('Discovered projects:', Object.keys(projects));
+    // Log discovered projects on startup
+    discoverProjects().then(projects => {
+      console.log('Discovered projects:', Object.keys(projects));
+    });
   });
-});
+}
+
+// Export for testing
+module.exports = {
+  app,
+  isValidProjectId,
+  sanitizeGrep,
+  validateAndGetProject,
+  readProjectResults,
+  discoverProjects,
+  RESULTS_DIR
+};
