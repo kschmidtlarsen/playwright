@@ -12,23 +12,23 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../frontend/public')));
 
-// Project configurations
+// Project configurations - uses /var/www/ paths on Pi cluster
 const PROJECTS = {
   'crossfit-generator': {
     name: 'CrossFit Generator',
-    path: '/data/websites/crossfit-generator/backend',
+    path: '/var/www/crossfit_generator/backend',
     baseUrl: 'http://192.168.0.120:3000',
     port: 3000
   },
   'rental': {
     name: 'Rental Platform',
-    path: '/data/websites/rental/backend',
+    path: '/var/www/rental/backend',
     baseUrl: 'http://192.168.0.120:3002',
     port: 3002
   },
   'ical-adjuster': {
     name: 'iCal Adjuster',
-    path: '/data/websites/ical-adjuster/backend',
+    path: '/var/www/ical-adjuster/backend',
     baseUrl: 'http://192.168.0.120:3020',
     port: 3020
   }
