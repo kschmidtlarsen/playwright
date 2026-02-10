@@ -2,9 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs').promises;
-const { exec } = require('child_process');
-const util = require('util');
-const execAsync = util.promisify(exec);
+const { spawn } = require('child_process');
 
 const app = express();
 const PORT = process.env.PORT || 3030;
@@ -222,26 +220,40 @@ app.post('/api/run-all', async (req, res) => {
 async function runTestsForProject(projectId, config, grep) {
   await ensureResultsDir();
 
-  const grepArg = grep ? `--grep "${grep}"` : '';
-  const cmd = `cd ${config.path} && E2E_BASE_URL=${config.baseUrl} npx playwright test --reporter=json ${grepArg} 2>&1`;
+  // Build arguments array (safe from shell injection)
+  const args = ['playwright', 'test', '--reporter=json'];
+  if (grep) {
+    args.push('--grep', grep);  // Pass as separate argument, not interpolated
+  }
 
   console.log(`Running tests for ${projectId}...`);
-  console.log(`Command: ${cmd}`);
+  console.log(`Command: npx ${args.join(' ')}`);
 
-  let stdout = '';
-  let exitCode = 0;
-
-  try {
-    const result = await execAsync(cmd, {
-      maxBuffer: 10 * 1024 * 1024,  // 10MB buffer for large outputs
+  // Use spawn with arguments array (no shell interpolation)
+  const result = await new Promise((resolve) => {
+    const child = spawn('npx', args, {
+      cwd: config.path,
+      env: { ...process.env, E2E_BASE_URL: config.baseUrl },
       timeout: 300000  // 5 minute timeout
     });
-    stdout = result.stdout;
-  } catch (err) {
-    // exec throws on non-zero exit code, but we still get stdout
-    stdout = err.stdout || '';
-    exitCode = err.code || 1;
-  }
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (data) => { stdout += data; });
+    child.stderr.on('data', (data) => { stderr += data; });
+
+    child.on('close', (code) => {
+      resolve({ stdout: stdout + stderr, exitCode: code || 0 });
+    });
+
+    child.on('error', (err) => {
+      resolve({ stdout: err.message, exitCode: 1 });
+    });
+  });
+
+  const stdout = result.stdout;
+  const exitCode = result.exitCode;
 
   // Parse JSON output
   let results;
