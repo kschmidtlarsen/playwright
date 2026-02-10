@@ -2,7 +2,9 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs').promises;
-const { spawn } = require('child_process');
+const { exec } = require('child_process');
+const util = require('util');
+const execAsync = util.promisify(exec);
 
 const app = express();
 const PORT = process.env.PORT || 3030;
@@ -12,26 +14,23 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../frontend/public')));
 
-// Project configurations - uses /var/www/ paths on Pi cluster
-const PROJECTS = {
-  'crossfit-generator': {
-    name: 'CrossFit Generator',
-    path: '/var/www/crossfit_generator/backend',
-    baseUrl: 'http://192.168.0.120:3000',
-    port: 3000
-  },
-  'rental': {
-    name: 'Rental Platform',
-    path: '/var/www/rental/backend',
-    baseUrl: 'http://192.168.0.120:3002',
-    port: 3002
-  },
-  'ical-adjuster': {
-    name: 'iCal Adjuster',
-    path: '/var/www/ical-adjuster/backend',
-    baseUrl: 'http://192.168.0.120:3020',
-    port: 3020
-  }
+// Base path for projects on Pi cluster
+const PROJECTS_BASE = '/var/www';
+
+// Known project configurations (port mappings)
+const PROJECT_PORTS = {
+  'rental': 3002,
+  'crossfit-repo': 3000,
+  'ical-adjuster': 3020,
+  'kanban': 3010
+};
+
+// Display names
+const PROJECT_NAMES = {
+  'rental': 'Rental Platform',
+  'crossfit-repo': 'CrossFit Generator',
+  'ical-adjuster': 'iCal Adjuster',
+  'kanban': 'Kanban Board'
 };
 
 // Results storage directory
@@ -46,27 +45,59 @@ async function ensureResultsDir() {
   }
 }
 
+// Discover projects dynamically
+async function discoverProjects() {
+  const projects = {};
+
+  try {
+    const dirs = await fs.readdir(PROJECTS_BASE);
+
+    for (const dir of dirs) {
+      const backendPath = path.join(PROJECTS_BASE, dir, 'backend');
+      const e2ePath = path.join(backendPath, 'e2e');
+      const playwrightConfig = path.join(backendPath, 'playwright.config.js');
+
+      try {
+        // Check if backend/e2e exists and has test files
+        const e2eStats = await fs.stat(e2ePath);
+        const configStats = await fs.stat(playwrightConfig);
+
+        if (e2eStats.isDirectory() && configStats.isFile()) {
+          const port = PROJECT_PORTS[dir] || 3000;
+          projects[dir] = {
+            id: dir,
+            name: PROJECT_NAMES[dir] || dir,
+            path: backendPath,
+            baseUrl: `http://192.168.0.120:${port}`,
+            port
+          };
+        }
+      } catch (err) {
+        // No e2e tests for this project
+      }
+    }
+  } catch (err) {
+    console.error('Error discovering projects:', err);
+  }
+
+  return projects;
+}
+
 // Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'healthy', service: 'test-dashboard' });
 });
 
-// Get list of projects
-app.get('/api/projects', (req, res) => {
-  const projects = Object.entries(PROJECTS).map(([id, config]) => ({
-    id,
-    ...config
-  }));
-  res.json(projects);
+// Get list of projects (dynamic discovery)
+app.get('/api/projects', async (req, res) => {
+  const projects = await discoverProjects();
+  const projectList = Object.values(projects);
+  res.json(projectList);
 });
 
 // Get test results for a project
 app.get('/api/results/:projectId', async (req, res) => {
   const { projectId } = req.params;
-
-  if (!PROJECTS[projectId]) {
-    return res.status(404).json({ error: 'Project not found' });
-  }
 
   try {
     const resultsFile = path.join(RESULTS_DIR, `${projectId}.json`);
@@ -80,10 +111,10 @@ app.get('/api/results/:projectId', async (req, res) => {
 // Get all results summary
 app.get('/api/results', async (req, res) => {
   await ensureResultsDir();
-
+  const projects = await discoverProjects();
   const summary = {};
 
-  for (const [projectId, config] of Object.entries(PROJECTS)) {
+  for (const [projectId, config] of Object.entries(projects)) {
     try {
       const resultsFile = path.join(RESULTS_DIR, `${projectId}.json`);
       const data = await fs.readFile(resultsFile, 'utf-8');
@@ -95,7 +126,8 @@ app.get('/api/results', async (req, res) => {
         failed: parsed.lastRun?.stats?.failed || 0,
         skipped: parsed.lastRun?.stats?.skipped || 0,
         total: parsed.lastRun?.stats?.total || 0,
-        status: parsed.lastRun?.stats?.failed > 0 ? 'failed' : 'passed'
+        status: parsed.lastRun?.stats?.failed > 0 ? 'failed' :
+                parsed.lastRun?.stats?.passed > 0 ? 'passed' : 'unknown'
       };
     } catch (err) {
       summary[projectId] = {
@@ -116,31 +148,31 @@ app.get('/api/results', async (req, res) => {
 // Run tests for a project
 app.post('/api/run/:projectId', async (req, res) => {
   const { projectId } = req.params;
-  const { grep } = req.body; // Optional filter
+  const { grep } = req.body;
 
-  if (!PROJECTS[projectId]) {
+  const projects = await discoverProjects();
+  const config = projects[projectId];
+
+  if (!config) {
     return res.status(404).json({ error: 'Project not found' });
   }
 
-  const config = PROJECTS[projectId];
-
-  // Start running tests in background
   res.json({ message: 'Tests started', projectId });
 
-  try {
-    await runTestsForProject(projectId, config, grep);
-  } catch (err) {
+  // Run tests in background
+  runTestsForProject(projectId, config, grep).catch(err => {
     console.error(`Error running tests for ${projectId}:`, err);
-  }
+  });
 });
 
 // Run tests for all projects
 app.post('/api/run-all', async (req, res) => {
   const { grep } = req.body;
+  const projects = await discoverProjects();
 
-  res.json({ message: 'Running tests for all projects' });
+  res.json({ message: 'Running tests for all projects', projects: Object.keys(projects) });
 
-  for (const [projectId, config] of Object.entries(PROJECTS)) {
+  for (const [projectId, config] of Object.entries(projects)) {
     try {
       await runTestsForProject(projectId, config, grep);
     } catch (err) {
@@ -153,133 +185,114 @@ app.post('/api/run-all', async (req, res) => {
 async function runTestsForProject(projectId, config, grep) {
   await ensureResultsDir();
 
-  return new Promise((resolve, reject) => {
-    const args = [
-      'playwright', 'test',
-      '--reporter=json',
-      '--output', path.join(RESULTS_DIR, `${projectId}-artifacts`)
-    ];
+  const grepArg = grep ? `--grep "${grep}"` : '';
+  const cmd = `cd ${config.path} && E2E_BASE_URL=${config.baseUrl} npx playwright test --reporter=json ${grepArg} 2>&1`;
 
-    if (grep) {
-      args.push('--grep', grep);
+  console.log(`Running tests for ${projectId}...`);
+  console.log(`Command: ${cmd}`);
+
+  let stdout = '';
+  let exitCode = 0;
+
+  try {
+    const result = await execAsync(cmd, {
+      maxBuffer: 10 * 1024 * 1024,  // 10MB buffer for large outputs
+      timeout: 300000  // 5 minute timeout
+    });
+    stdout = result.stdout;
+  } catch (err) {
+    // exec throws on non-zero exit code, but we still get stdout
+    stdout = err.stdout || '';
+    exitCode = err.code || 1;
+  }
+
+  // Parse JSON output
+  let results;
+  try {
+    // Find JSON in output (might have other text around it)
+    const jsonMatch = stdout.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      results = JSON.parse(jsonMatch[0]);
+    } else {
+      throw new Error('No JSON found in output');
     }
-
-    const env = {
-      ...process.env,
-      E2E_BASE_URL: config.baseUrl
+  } catch (parseErr) {
+    console.error(`Failed to parse test output for ${projectId}:`, parseErr.message);
+    results = {
+      config: {},
+      suites: [],
+      errors: [stdout.substring(0, 500) || 'Failed to parse test output']
     };
+  }
 
-    console.log(`Running tests for ${projectId}...`);
+  // Calculate stats
+  const stats = {
+    total: 0,
+    passed: 0,
+    failed: 0,
+    skipped: 0,
+    duration: results.stats?.duration || 0
+  };
 
-    const child = spawn('npx', args, {
-      cwd: config.path,
-      env,
-      shell: true
-    });
-
-    let stdout = '';
-    let stderr = '';
-
-    child.stdout.on('data', (data) => {
-      stdout += data.toString();
-    });
-
-    child.stderr.on('data', (data) => {
-      stderr += data.toString();
-    });
-
-    child.on('close', async (code) => {
-      try {
-        // Parse JSON output
-        let results;
-        try {
-          results = JSON.parse(stdout);
-        } catch (parseErr) {
-          // If JSON parsing fails, create a minimal result
-          results = {
-            config: {},
-            suites: [],
-            errors: [stderr || 'Failed to parse test output']
-          };
-        }
-
-        // Calculate stats
-        const stats = {
-          total: 0,
-          passed: 0,
-          failed: 0,
-          skipped: 0,
-          duration: results.stats?.duration || 0
-        };
-
-        // Count results from suites
-        function countResults(suites) {
-          for (const suite of suites || []) {
-            for (const spec of suite.specs || []) {
-              for (const test of spec.tests || []) {
-                stats.total++;
-                const status = test.results?.[0]?.status || 'unknown';
-                if (status === 'passed' || status === 'expected') {
-                  stats.passed++;
-                } else if (status === 'failed' || status === 'unexpected') {
-                  stats.failed++;
-                } else if (status === 'skipped') {
-                  stats.skipped++;
-                }
-              }
-            }
-            countResults(suite.suites);
+  // Count results from suites
+  function countResults(suites) {
+    for (const suite of suites || []) {
+      for (const spec of suite.specs || []) {
+        for (const test of spec.tests || []) {
+          stats.total++;
+          const status = test.results?.[0]?.status || 'unknown';
+          if (status === 'passed' || status === 'expected') {
+            stats.passed++;
+          } else if (status === 'failed' || status === 'unexpected') {
+            stats.failed++;
+          } else if (status === 'skipped') {
+            stats.skipped++;
           }
         }
-        countResults(results.suites);
-
-        // Create run record
-        const run = {
-          id: Date.now().toString(),
-          timestamp: new Date().toISOString(),
-          stats,
-          grep: grep || null,
-          exitCode: code,
-          suites: results.suites || [],
-          errors: results.errors || []
-        };
-
-        // Load existing results
-        let existingData = { runs: [] };
-        try {
-          const existingFile = await fs.readFile(path.join(RESULTS_DIR, `${projectId}.json`), 'utf-8');
-          existingData = JSON.parse(existingFile);
-        } catch (err) {
-          // File doesn't exist yet
-        }
-
-        // Add new run (keep last 20 runs)
-        existingData.runs.unshift(run);
-        existingData.runs = existingData.runs.slice(0, 20);
-        existingData.lastRun = run;
-
-        // Save results
-        await fs.writeFile(
-          path.join(RESULTS_DIR, `${projectId}.json`),
-          JSON.stringify(existingData, null, 2)
-        );
-
-        console.log(`Tests completed for ${projectId}: ${stats.passed}/${stats.total} passed`);
-        resolve(run);
-      } catch (err) {
-        reject(err);
       }
-    });
-  });
+      countResults(suite.suites);
+    }
+  }
+  countResults(results.suites);
+
+  // Create run record
+  const run = {
+    id: Date.now().toString(),
+    timestamp: new Date().toISOString(),
+    stats,
+    grep: grep || null,
+    exitCode,
+    suites: results.suites || [],
+    errors: results.errors || []
+  };
+
+  // Load existing results
+  let existingData = { runs: [] };
+  try {
+    const existingFile = await fs.readFile(path.join(RESULTS_DIR, `${projectId}.json`), 'utf-8');
+    existingData = JSON.parse(existingFile);
+  } catch (err) {
+    // File doesn't exist yet
+  }
+
+  // Add new run (keep last 20 runs)
+  existingData.runs.unshift(run);
+  existingData.runs = existingData.runs.slice(0, 20);
+  existingData.lastRun = run;
+
+  // Save results
+  await fs.writeFile(
+    path.join(RESULTS_DIR, `${projectId}.json`),
+    JSON.stringify(existingData, null, 2)
+  );
+
+  console.log(`Tests completed for ${projectId}: ${stats.passed}/${stats.total} passed`);
+  return run;
 }
 
 // Get test run history for a project
 app.get('/api/history/:projectId', async (req, res) => {
   const { projectId } = req.params;
-
-  if (!PROJECTS[projectId]) {
-    return res.status(404).json({ error: 'Project not found' });
-  }
 
   try {
     const resultsFile = path.join(RESULTS_DIR, `${projectId}.json`);
@@ -299,4 +312,9 @@ app.get('*', (req, res) => {
 app.listen(PORT, () => {
   console.log(`Test Dashboard running on http://localhost:${PORT}`);
   ensureResultsDir();
+
+  // Log discovered projects on startup
+  discoverProjects().then(projects => {
+    console.log('Discovered projects:', Object.keys(projects));
+  });
 });
