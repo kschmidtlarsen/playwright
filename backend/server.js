@@ -250,10 +250,7 @@ app.post('/api/run/:projectId', async (req, res) => {
   const safeGrep = sanitizeGrep(grep);
   res.json({ message: 'Tests started', projectId });
 
-  // Broadcast that tests are starting
-  broadcast('tests:started', { projectId, grep: safeGrep });
-
-  // Run tests in background
+  // Run tests in background (broadcasts tests:started with expectedTotal)
   runTestsForProject(projectId, validation.project, safeGrep).catch(err => {
     console.error(`Error running tests for ${projectId}:`, err);
     broadcast('tests:error', { projectId, error: err.message });
@@ -348,18 +345,82 @@ app.post('/api/upload/:projectId', async (req, res) => {
   res.json({ message: 'Results uploaded', run });
 });
 
+// Helper: Get total test count from Playwright
+async function getTestCount(config, grep) {
+  const args = ['playwright', 'test', '--list', '--reporter=json'];
+  if (grep) {
+    args.push('--grep', grep);
+  }
+
+  return new Promise((resolve) => {
+    const child = spawn('npx', args, {
+      cwd: config.path,
+      env: { ...process.env, E2E_BASE_URL: config.baseUrl },
+      timeout: 30000
+    });
+
+    let stdout = '';
+    child.stdout.on('data', (data) => { stdout += data; });
+    child.stderr.on('data', (data) => { stdout += data; });
+
+    child.on('close', () => {
+      try {
+        const jsonStart = stdout.indexOf('{');
+        if (jsonStart !== -1) {
+          const data = JSON.parse(stdout.substring(jsonStart));
+          // Count tests in suites
+          let count = 0;
+          function countTests(suites) {
+            for (const suite of suites || []) {
+              for (const spec of suite.specs || []) {
+                count += (spec.tests || []).length;
+              }
+              countTests(suite.suites);
+            }
+          }
+          countTests(data.suites);
+          resolve(count);
+        } else {
+          resolve(0);
+        }
+      } catch (err) {
+        console.error('Failed to get test count:', err.message);
+        resolve(0);
+      }
+    });
+
+    child.on('error', () => resolve(0));
+  });
+}
+
 // Function to run tests and save results
 async function runTestsForProject(projectId, config, grep) {
   await ensureResultsDir();
+  const startTime = Date.now();
 
-  // Build arguments array (safe from shell injection)
-  const args = ['playwright', 'test', '--reporter=json'];
+  // Get expected test count first
+  const expectedTotal = await getTestCount(config, grep);
+  console.log(`Expected ${expectedTotal} tests for ${projectId}`);
+
+  // Broadcast start with expected total
+  broadcast('tests:started', {
+    projectId,
+    grep: grep || null,
+    expectedTotal,
+    startTime: new Date(startTime).toISOString()
+  });
+
+  // Build arguments for line reporter (for progress) + JSON (for final results)
+  const args = ['playwright', 'test', '--reporter=line,json'];
   if (grep) {
-    args.push('--grep', grep);  // Pass as separate argument, not interpolated
+    args.push('--grep', grep);
   }
 
   console.log(`Running tests for ${projectId}...`);
   console.log(`Command: npx ${args.join(' ')}`);
+
+  // Track progress
+  const progress = { passed: 0, failed: 0, skipped: 0, completed: 0 };
 
   // Use spawn with arguments array (no shell interpolation)
   const result = await new Promise((resolve) => {
@@ -370,13 +431,40 @@ async function runTestsForProject(projectId, config, grep) {
     });
 
     let stdout = '';
-    let stderr = '';
+    let lineBuffer = '';
 
-    child.stdout.on('data', (data) => { stdout += data; });
-    child.stderr.on('data', (data) => { stderr += data; });
+    child.stdout.on('data', (data) => {
+      stdout += data;
+      lineBuffer += data.toString();
+
+      // Parse line output for progress
+      const lines = lineBuffer.split('\n');
+      lineBuffer = lines.pop(); // Keep incomplete line in buffer
+
+      for (const line of lines) {
+        // Line reporter format: "  ✓  1 [chromium] › file.spec.ts:10:5 › test name (1.2s)"
+        // Or: "  ✘  2 [chromium] › file.spec.ts:20:5 › failed test (500ms)"
+        // Or: "  -  3 [chromium] › file.spec.ts:30:5 › skipped test"
+        if (line.includes('✓') || line.includes('✔') || line.match(/^\s+\d+\s+passed/)) {
+          progress.passed++;
+          progress.completed++;
+          broadcast('tests:progress', { projectId, ...progress, expectedTotal });
+        } else if (line.includes('✘') || line.includes('✗') || line.match(/^\s+\d+\s+failed/)) {
+          progress.failed++;
+          progress.completed++;
+          broadcast('tests:progress', { projectId, ...progress, expectedTotal });
+        } else if (line.includes('-') && line.includes('skipped')) {
+          progress.skipped++;
+          progress.completed++;
+          broadcast('tests:progress', { projectId, ...progress, expectedTotal });
+        }
+      }
+    });
+
+    child.stderr.on('data', (data) => { stdout += data; });
 
     child.on('close', (code) => {
-      resolve({ stdout: stdout + stderr, exitCode: code || 0 });
+      resolve({ stdout, exitCode: code || 0 });
     });
 
     child.on('error', (err) => {
@@ -386,18 +474,24 @@ async function runTestsForProject(projectId, config, grep) {
 
   const stdout = result.stdout;
   const exitCode = result.exitCode;
+  const duration = Date.now() - startTime;
 
-  // Parse JSON output
+  // Parse JSON output for final results
   let results;
   try {
-    // Find JSON in output using indexOf (safe from ReDoS)
-    const jsonStart = stdout.indexOf('{');
+    // Find JSON in output - look for the last complete JSON object
+    const jsonStart = stdout.lastIndexOf('\n{');
     if (jsonStart !== -1) {
-      // Try to parse from the first { to the end
-      const jsonCandidate = stdout.substring(jsonStart);
+      const jsonCandidate = stdout.substring(jsonStart + 1);
       results = JSON.parse(jsonCandidate);
     } else {
-      throw new Error('No JSON found in output');
+      // Try from first {
+      const firstJson = stdout.indexOf('{');
+      if (firstJson !== -1) {
+        results = JSON.parse(stdout.substring(firstJson));
+      } else {
+        throw new Error('No JSON found in output');
+      }
     }
   } catch (parseErr) {
     console.error(`Failed to parse test output for ${projectId}:`, parseErr.message);
@@ -408,16 +502,15 @@ async function runTestsForProject(projectId, config, grep) {
     };
   }
 
-  // Calculate stats
+  // Calculate stats from JSON results (more accurate than line parsing)
   const stats = {
     total: 0,
     passed: 0,
     failed: 0,
     skipped: 0,
-    duration: results.stats?.duration || 0
+    duration
   };
 
-  // Count results from suites
   function countResults(suites) {
     for (const suite of suites || []) {
       for (const spec of suite.specs || []) {

@@ -12,7 +12,12 @@ let projects = [];
 let results = {};
 let expandedProjects = new Set();
 let expandedTests = new Set();
-let runningProjects = new Set();
+
+// Running project state: { projectId: { startTime, expectedTotal, passed, failed, skipped, completed } }
+const runningProjectState = new Map();
+
+// Elapsed time update interval
+let elapsedTimeInterval = null;
 
 // DOM Elements
 const summaryCards = document.getElementById('summaryCards');
@@ -72,34 +77,27 @@ function updateConnectionStatus(connected) {
 }
 
 function handleWebSocketMessage(message) {
-  const { event, data, timestamp } = message;
+  const { event, data } = message;
 
   switch (event) {
     case 'tests:started':
-      runningProjects.add(data.projectId);
-      showToast(`Tests started for ${data.projectId}${data.grep ? ` (${data.grep})` : ''}`, 'info');
-      updateProjectRunningState(data.projectId, true);
+      handleTestsStarted(data);
+      break;
+
+    case 'tests:progress':
+      handleTestsProgress(data);
       break;
 
     case 'tests:completed':
-      runningProjects.delete(data.projectId);
-      const { run, projectId } = data;
-      showToast(`Tests completed for ${projectId}: ${run.stats.passed}/${run.stats.total} passed`,
-                run.stats.failed > 0 ? 'error' : 'success');
-      updateProjectRunningState(projectId, false);
-      loadResults(); // Refresh all results
+      handleTestsCompleted(data);
       break;
 
     case 'tests:error':
-      runningProjects.delete(data.projectId);
-      showToast(`Test error for ${data.projectId}: ${data.error}`, 'error');
-      updateProjectRunningState(data.projectId, false);
+      handleTestsError(data);
       break;
 
     case 'results:uploaded':
-      const uploadedRun = data.run;
-      showToast(`Results uploaded for ${data.projectId}: ${uploadedRun.stats.passed}/${uploadedRun.stats.total} passed`, 'success');
-      loadResults(); // Refresh all results
+      handleResultsUploaded(data);
       break;
 
     default:
@@ -107,19 +105,181 @@ function handleWebSocketMessage(message) {
   }
 }
 
-function updateProjectRunningState(projectId, isRunning) {
+function handleTestsStarted(data) {
+  const { projectId, expectedTotal, startTime, grep } = data;
+
+  // Initialize running state
+  runningProjectState.set(projectId, {
+    startTime: new Date(startTime),
+    expectedTotal: expectedTotal || 0,
+    passed: 0,
+    failed: 0,
+    skipped: 0,
+    completed: 0
+  });
+
+  showToast(`Tests started for ${projectId}${grep ? ` (${grep})` : ''} - ${expectedTotal} tests`, 'info');
+
+  // Update card to show running state with zeroed counters
+  updateCardForRunning(projectId);
+
+  // Grey out results section for this project
+  updateResultsRunningState(projectId, true);
+
+  // Start elapsed time updates if not already running
+  startElapsedTimeUpdates();
+}
+
+function handleTestsProgress(data) {
+  const { projectId, passed, failed, skipped, completed, expectedTotal } = data;
+
+  const state = runningProjectState.get(projectId);
+  if (state) {
+    state.passed = passed;
+    state.failed = failed;
+    state.skipped = skipped;
+    state.completed = completed;
+    state.expectedTotal = expectedTotal;
+
+    // Update the card with new progress
+    updateCardProgress(projectId, state);
+  }
+}
+
+function handleTestsCompleted(data) {
+  const { projectId, run } = data;
+
+  // Remove from running state
+  runningProjectState.delete(projectId);
+
+  showToast(
+    `Tests completed for ${projectId}: ${run.stats.passed}/${run.stats.total} passed`,
+    run.stats.failed > 0 ? 'error' : 'success'
+  );
+
+  // Stop elapsed time updates if no more running projects
+  if (runningProjectState.size === 0) {
+    stopElapsedTimeUpdates();
+  }
+
+  // Un-grey results section
+  updateResultsRunningState(projectId, false);
+
+  // Refresh all results to get the final data
+  loadResults();
+}
+
+function handleTestsError(data) {
+  const { projectId, error } = data;
+
+  runningProjectState.delete(projectId);
+  showToast(`Test error for ${projectId}: ${error}`, 'error');
+
+  if (runningProjectState.size === 0) {
+    stopElapsedTimeUpdates();
+  }
+
+  updateResultsRunningState(projectId, false);
+  renderSummaryCards();
+}
+
+function handleResultsUploaded(data) {
+  const { projectId, run } = data;
+  showToast(
+    `Results uploaded for ${projectId}: ${run.stats.passed}/${run.stats.total} passed`,
+    'success'
+  );
+  loadResults();
+}
+
+function updateCardForRunning(projectId) {
+  const state = runningProjectState.get(projectId);
+  if (!state) return;
+
   const card = document.querySelector(`[data-project-id="${projectId}"]`);
-  if (card) {
-    const btn = card.querySelector('.run-btn');
-    if (btn) {
-      btn.disabled = isRunning;
-      btn.textContent = isRunning ? 'Running...' : 'Run Tests';
-      if (isRunning) {
-        btn.classList.add('running');
-      } else {
-        btn.classList.remove('running');
-      }
+  if (!card) return;
+
+  // Update status to "Running"
+  const statusEl = card.querySelector('.summary-card-status');
+  if (statusEl) {
+    statusEl.className = 'summary-card-status status-running';
+    statusEl.textContent = 'Running';
+  }
+
+  // Update stats to show 0 / expectedTotal
+  updateCardProgress(projectId, state);
+
+  // Update footer to show elapsed time
+  const lastRunEl = card.querySelector('.last-run');
+  if (lastRunEl) {
+    lastRunEl.setAttribute('data-running', 'true');
+    lastRunEl.textContent = 'Running: 0s';
+  }
+
+  // Update button
+  const btn = card.querySelector('.run-btn');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Running...';
+    btn.classList.add('running');
+  }
+}
+
+function updateCardProgress(projectId, state) {
+  const card = document.querySelector(`[data-project-id="${projectId}"]`);
+  if (!card) return;
+
+  // Update stat values
+  const passedEl = card.querySelector('.stat-value.passed');
+  const failedEl = card.querySelector('.stat-value.failed');
+  const skippedEl = card.querySelector('.stat-value.skipped');
+  const totalEl = card.querySelector('.stat-value.total');
+
+  if (passedEl) passedEl.textContent = state.passed;
+  if (failedEl) failedEl.textContent = state.failed;
+  if (skippedEl) skippedEl.textContent = state.skipped;
+  if (totalEl) totalEl.textContent = `${state.completed} / ${state.expectedTotal}`;
+}
+
+function updateElapsedTimes() {
+  const now = new Date();
+
+  for (const [projectId, state] of runningProjectState) {
+    const card = document.querySelector(`[data-project-id="${projectId}"]`);
+    if (!card) continue;
+
+    const lastRunEl = card.querySelector('.last-run');
+    if (lastRunEl && lastRunEl.getAttribute('data-running') === 'true') {
+      const elapsed = Math.floor((now - state.startTime) / 1000);
+      lastRunEl.textContent = `Running: ${formatElapsedTime(elapsed)}`;
     }
+  }
+}
+
+function formatElapsedTime(seconds) {
+  if (seconds < 60) return `${seconds}s`;
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${mins}m ${secs}s`;
+}
+
+function startElapsedTimeUpdates() {
+  if (!elapsedTimeInterval) {
+    elapsedTimeInterval = setInterval(updateElapsedTimes, 1000);
+  }
+}
+
+function stopElapsedTimeUpdates() {
+  if (elapsedTimeInterval) {
+    clearInterval(elapsedTimeInterval);
+    elapsedTimeInterval = null;
+  }
+}
+
+function updateResultsRunningState(projectId, isRunning) {
+  const resultsEl = document.querySelector(`.project-results[data-results-project="${projectId}"]`);
+  if (resultsEl) {
+    resultsEl.classList.toggle('running-disabled', isRunning);
   }
 }
 
@@ -170,41 +330,63 @@ function renderSummaryCards() {
     card.className = 'summary-card';
     card.setAttribute('data-project-id', project.id);
 
-    const statusClass = data.status === 'failed' ? 'status-failed' :
-                        data.status === 'passed' ? 'status-passed' : 'status-unknown';
+    const isRunning = runningProjectState.has(project.id);
+    const runState = runningProjectState.get(project.id);
 
-    const lastRunText = data.lastRun ?
-      formatDate(data.lastRun.timestamp) : 'Never run';
+    let statusClass, statusText;
+    if (isRunning) {
+      statusClass = 'status-running';
+      statusText = 'Running';
+    } else {
+      statusClass = data.status === 'failed' ? 'status-failed' :
+                    data.status === 'passed' ? 'status-passed' : 'status-unknown';
+      statusText = data.status || 'Unknown';
+    }
 
-    const isRunning = runningProjects.has(project.id);
+    // Use running state values if running, otherwise use results
+    const passed = isRunning ? runState.passed : (data.passed || 0);
+    const failed = isRunning ? runState.failed : (data.failed || 0);
+    const skipped = isRunning ? runState.skipped : (data.skipped || 0);
+    const total = isRunning
+      ? `${runState.completed} / ${runState.expectedTotal}`
+      : (data.total || 0);
+
+    // Footer text
+    let footerText;
+    if (isRunning) {
+      const elapsed = Math.floor((new Date() - runState.startTime) / 1000);
+      footerText = `Running: ${formatElapsedTime(elapsed)}`;
+    } else {
+      footerText = data.lastRun ? `Last run: ${formatDate(data.lastRun.timestamp)}` : 'Last run: Never';
+    }
 
     card.innerHTML = `
       <div class="summary-card-header">
         <span class="summary-card-title">${project.name}</span>
         <span class="summary-card-status ${statusClass}">
-          ${data.status || 'Unknown'}
+          ${statusText}
         </span>
       </div>
       <div class="summary-card-stats">
         <div class="stat">
-          <div class="stat-value passed">${data.passed || 0}</div>
+          <div class="stat-value passed">${passed}</div>
           <div class="stat-label">Passed</div>
         </div>
         <div class="stat">
-          <div class="stat-value failed">${data.failed || 0}</div>
+          <div class="stat-value failed">${failed}</div>
           <div class="stat-label">Failed</div>
         </div>
         <div class="stat">
-          <div class="stat-value skipped">${data.skipped || 0}</div>
+          <div class="stat-value skipped">${skipped}</div>
           <div class="stat-label">Skipped</div>
         </div>
         <div class="stat">
-          <div class="stat-value total">${data.total || 0}</div>
+          <div class="stat-value total">${total}</div>
           <div class="stat-label">Total</div>
         </div>
       </div>
       <div class="summary-card-footer">
-        <span class="last-run">Last run: ${lastRunText}</span>
+        <span class="last-run" ${isRunning ? 'data-running="true"' : ''}>${footerText}</span>
         <button class="btn btn-sm btn-primary run-btn ${isRunning ? 'running' : ''}"
                 onclick="runTests('${project.id}')" ${isRunning ? 'disabled' : ''}>
           ${isRunning ? 'Running...' : 'Run Tests'}
@@ -227,17 +409,20 @@ async function renderResults() {
     projects : projects.filter(p => p.id === selectedProject);
 
   for (const project of projectsToShow) {
+    const isRunning = runningProjectState.has(project.id);
+
     try {
       const res = await fetch(`${API_BASE}/api/results/${project.id}`);
       const data = await res.json();
 
       if (!data.lastRun) {
         const div = document.createElement('div');
-        div.className = 'project-results';
+        div.className = `project-results ${isRunning ? 'running-disabled' : ''}`;
+        div.setAttribute('data-results-project', project.id);
         div.innerHTML = `
           <div class="project-header">
             <span class="project-name">${project.name}</span>
-            <span class="project-summary">No tests run yet</span>
+            <span class="project-summary">${isRunning ? 'Tests running...' : 'No tests run yet'}</span>
           </div>
         `;
         resultsContainer.appendChild(div);
@@ -245,17 +430,20 @@ async function renderResults() {
       }
 
       const tests = extractTests(data.lastRun.suites, selectedStatus);
-      const isExpanded = expandedProjects.has(project.id);
+      const isExpanded = expandedProjects.has(project.id) && !isRunning;
 
       const div = document.createElement('div');
-      div.className = 'project-results';
+      div.className = `project-results ${isRunning ? 'running-disabled' : ''}`;
+      div.setAttribute('data-results-project', project.id);
       div.innerHTML = `
-        <div class="project-header" onclick="toggleProject('${project.id}')">
+        <div class="project-header" onclick="${isRunning ? '' : `toggleProject('${project.id}')`}" style="${isRunning ? 'cursor: not-allowed;' : ''}">
           <span class="project-name">${project.name}</span>
           <div class="project-summary">
+            ${isRunning ? '<span class="running-indicator">Tests running...</span>' : `
             <span style="color: var(--success)">✓ ${data.lastRun.stats.passed}</span>
             <span style="color: var(--error)">✗ ${data.lastRun.stats.failed}</span>
             <span style="color: var(--warning)">○ ${data.lastRun.stats.skipped}</span>
+            `}
           </div>
         </div>
         <div class="test-list ${isExpanded ? 'expanded' : ''}" id="tests-${project.id}">
@@ -327,7 +515,6 @@ function extractTests(suites, statusFilter) {
                                    status === 'unexpected' ? 'failed' : status;
 
           if (statusFilter === 'all' || normalizedStatus === statusFilter) {
-            // Extract description from annotations
             const descAnnotation = test.annotations?.find(a => a.type === 'description');
             const description = descAnnotation?.description || null;
 
@@ -389,7 +576,6 @@ async function renderHistory() {
     }
   }
 
-  // Sort by timestamp descending
   allHistory.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
   for (const run of allHistory.slice(0, 10)) {
@@ -420,6 +606,9 @@ async function renderHistory() {
 
 // Toggle project expansion
 function toggleProject(projectId) {
+  // Don't allow expansion while running
+  if (runningProjectState.has(projectId)) return;
+
   if (expandedProjects.has(projectId)) {
     expandedProjects.delete(projectId);
   } else {
@@ -434,9 +623,15 @@ function toggleProject(projectId) {
 
 // Run tests for a single project
 async function runTests(projectId) {
-  // Mark as running immediately for UI feedback
-  runningProjects.add(projectId);
-  updateProjectRunningState(projectId, true);
+  // Mark as pending in UI immediately
+  const card = document.querySelector(`[data-project-id="${projectId}"]`);
+  if (card) {
+    const btn = card.querySelector('.run-btn');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Starting...';
+    }
+  }
 
   try {
     const res = await fetch(`${API_BASE}/api/run/${projectId}`, {
@@ -448,17 +643,23 @@ async function runTests(projectId) {
 
     if (!res.ok) {
       showToast(data.error || 'Failed to start tests', 'error');
-      runningProjects.delete(projectId);
-      updateProjectRunningState(projectId, false);
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Run Tests';
+      }
       return;
     }
 
-    // WebSocket will handle the tests:started and tests:completed events
-    // No need to poll - updates come via WebSocket automatically
+    // WebSocket will handle tests:started with expectedTotal
   } catch (err) {
     showToast('Failed to start tests', 'error');
-    runningProjects.delete(projectId);
-    updateProjectRunningState(projectId, false);
+    if (card) {
+      const btn = card.querySelector('.run-btn');
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Run Tests';
+      }
+    }
   }
 }
 
@@ -472,16 +673,21 @@ async function runAllTests() {
 
     const data = await res.json();
 
-    // Mark all runnable projects as running
+    // Mark buttons as starting
     if (data.projects) {
       data.projects.forEach(projectId => {
-        runningProjects.add(projectId);
-        updateProjectRunningState(projectId, true);
+        const card = document.querySelector(`[data-project-id="${projectId}"]`);
+        if (card) {
+          const btn = card.querySelector('.run-btn');
+          if (btn) {
+            btn.disabled = true;
+            btn.textContent = 'Starting...';
+          }
+        }
       });
     }
 
     showToast('Running tests for all projects...', 'success');
-    // WebSocket will handle updates as tests complete
   } catch (err) {
     showToast('Failed to start tests', 'error');
   }
