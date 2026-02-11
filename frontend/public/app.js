@@ -1,11 +1,18 @@
 // API Base URL
 const API_BASE = window.location.origin;
 
+// WebSocket connection
+let ws = null;
+let wsReconnectAttempts = 0;
+const WS_MAX_RECONNECT_ATTEMPTS = 5;
+const WS_RECONNECT_DELAY = 3000;
+
 // State
 let projects = [];
 let results = {};
 let expandedProjects = new Set();
 let expandedTests = new Set();
+let runningProjects = new Set();
 
 // DOM Elements
 const summaryCards = document.getElementById('summaryCards');
@@ -18,11 +25,100 @@ const refreshBtn = document.getElementById('refreshBtn');
 const loadingOverlay = document.getElementById('loadingOverlay');
 const toast = document.getElementById('toast');
 
+// WebSocket setup
+function connectWebSocket() {
+  const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${wsProtocol}//${window.location.host}`;
+
+  ws = new WebSocket(wsUrl);
+
+  ws.onopen = () => {
+    console.log('WebSocket connected');
+    wsReconnectAttempts = 0;
+    showToast('Connected to live updates', 'success');
+  };
+
+  ws.onmessage = (event) => {
+    try {
+      const message = JSON.parse(event.data);
+      handleWebSocketMessage(message);
+    } catch (err) {
+      console.error('Failed to parse WebSocket message:', err);
+    }
+  };
+
+  ws.onclose = () => {
+    console.log('WebSocket disconnected');
+    if (wsReconnectAttempts < WS_MAX_RECONNECT_ATTEMPTS) {
+      wsReconnectAttempts++;
+      console.log(`Reconnecting... attempt ${wsReconnectAttempts}`);
+      setTimeout(connectWebSocket, WS_RECONNECT_DELAY);
+    }
+  };
+
+  ws.onerror = (err) => {
+    console.error('WebSocket error:', err);
+  };
+}
+
+function handleWebSocketMessage(message) {
+  const { event, data, timestamp } = message;
+
+  switch (event) {
+    case 'tests:started':
+      runningProjects.add(data.projectId);
+      showToast(`Tests started for ${data.projectId}${data.grep ? ` (${data.grep})` : ''}`, 'info');
+      updateProjectRunningState(data.projectId, true);
+      break;
+
+    case 'tests:completed':
+      runningProjects.delete(data.projectId);
+      const { run, projectId } = data;
+      showToast(`Tests completed for ${projectId}: ${run.stats.passed}/${run.stats.total} passed`,
+                run.stats.failed > 0 ? 'error' : 'success');
+      updateProjectRunningState(projectId, false);
+      loadResults(); // Refresh all results
+      break;
+
+    case 'tests:error':
+      runningProjects.delete(data.projectId);
+      showToast(`Test error for ${data.projectId}: ${data.error}`, 'error');
+      updateProjectRunningState(data.projectId, false);
+      break;
+
+    case 'results:uploaded':
+      const uploadedRun = data.run;
+      showToast(`Results uploaded for ${data.projectId}: ${uploadedRun.stats.passed}/${uploadedRun.stats.total} passed`, 'success');
+      loadResults(); // Refresh all results
+      break;
+
+    default:
+      console.log('Unknown WebSocket event:', event);
+  }
+}
+
+function updateProjectRunningState(projectId, isRunning) {
+  const card = document.querySelector(`[data-project-id="${projectId}"]`);
+  if (card) {
+    const btn = card.querySelector('.run-btn');
+    if (btn) {
+      btn.disabled = isRunning;
+      btn.textContent = isRunning ? 'Running...' : 'Run Tests';
+      if (isRunning) {
+        btn.classList.add('running');
+      } else {
+        btn.classList.remove('running');
+      }
+    }
+  }
+}
+
 // Initialize
 async function init() {
   await loadProjects();
   await loadResults();
   setupEventListeners();
+  connectWebSocket();
 }
 
 // Load projects
@@ -62,12 +158,15 @@ function renderSummaryCards() {
     const data = results[project.id] || {};
     const card = document.createElement('div');
     card.className = 'summary-card';
+    card.setAttribute('data-project-id', project.id);
 
     const statusClass = data.status === 'failed' ? 'status-failed' :
                         data.status === 'passed' ? 'status-passed' : 'status-unknown';
 
     const lastRunText = data.lastRun ?
       formatDate(data.lastRun.timestamp) : 'Never run';
+
+    const isRunning = runningProjects.has(project.id);
 
     card.innerHTML = `
       <div class="summary-card-header">
@@ -96,8 +195,9 @@ function renderSummaryCards() {
       </div>
       <div class="summary-card-footer">
         <span class="last-run">Last run: ${lastRunText}</span>
-        <button class="btn btn-sm btn-primary" onclick="runTests('${project.id}')">
-          Run Tests
+        <button class="btn btn-sm btn-primary run-btn ${isRunning ? 'running' : ''}"
+                onclick="runTests('${project.id}')" ${isRunning ? 'disabled' : ''}>
+          ${isRunning ? 'Running...' : 'Run Tests'}
         </button>
       </div>
     `;
@@ -324,7 +424,9 @@ function toggleProject(projectId) {
 
 // Run tests for a single project
 async function runTests(projectId) {
-  showLoading(true);
+  // Mark as running immediately for UI feedback
+  runningProjects.add(projectId);
+  updateProjectRunningState(projectId, true);
 
   try {
     const res = await fetch(`${API_BASE}/api/run/${projectId}`, {
@@ -336,69 +438,43 @@ async function runTests(projectId) {
 
     if (!res.ok) {
       showToast(data.error || 'Failed to start tests', 'error');
-      showLoading(false);
+      runningProjects.delete(projectId);
+      updateProjectRunningState(projectId, false);
       return;
     }
 
-    showToast(`Tests started for ${projectId}`, 'success');
-
-    // Poll for results
-    await pollForResults(projectId);
+    // WebSocket will handle the tests:started and tests:completed events
+    // No need to poll - updates come via WebSocket automatically
   } catch (err) {
     showToast('Failed to start tests', 'error');
-  } finally {
-    showLoading(false);
+    runningProjects.delete(projectId);
+    updateProjectRunningState(projectId, false);
   }
 }
 
 // Run all tests
 async function runAllTests() {
-  showLoading(true);
-
   try {
-    await fetch(`${API_BASE}/api/run-all`, {
+    const res = await fetch(`${API_BASE}/api/run-all`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' }
     });
 
+    const data = await res.json();
+
+    // Mark all runnable projects as running
+    if (data.projects) {
+      data.projects.forEach(projectId => {
+        runningProjects.add(projectId);
+        updateProjectRunningState(projectId, true);
+      });
+    }
+
     showToast('Running tests for all projects...', 'success');
-
-    // Wait and reload
-    setTimeout(async () => {
-      await loadResults();
-      showLoading(false);
-    }, 30000); // Wait 30 seconds then refresh
-
+    // WebSocket will handle updates as tests complete
   } catch (err) {
     showToast('Failed to start tests', 'error');
-    showLoading(false);
   }
-}
-
-// Poll for results
-async function pollForResults(projectId) {
-  let attempts = 0;
-  const maxAttempts = 60; // 2 minutes max
-
-  while (attempts < maxAttempts) {
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    attempts++;
-
-    try {
-      const res = await fetch(`${API_BASE}/api/results/${projectId}`);
-      const data = await res.json();
-
-      if (data.lastRun) {
-        await loadResults();
-        showToast(`Tests completed: ${data.lastRun.stats.passed}/${data.lastRun.stats.total} passed`, 'success');
-        return;
-      }
-    } catch (err) {
-      // Continue polling
-    }
-  }
-
-  await loadResults();
 }
 
 // Setup event listeners

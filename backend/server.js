@@ -3,9 +3,45 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs').promises;
 const { spawn } = require('child_process');
+const http = require('http');
+const WebSocket = require('ws');
 
 const app = express();
 const PORT = process.env.PORT || 3030;
+
+// Create HTTP server for both Express and WebSocket
+const server = http.createServer(app);
+
+// WebSocket server
+const wss = new WebSocket.Server({ server });
+
+// Track connected clients
+const clients = new Set();
+
+wss.on('connection', (ws) => {
+  clients.add(ws);
+  console.log(`WebSocket client connected. Total clients: ${clients.size}`);
+
+  ws.on('close', () => {
+    clients.delete(ws);
+    console.log(`WebSocket client disconnected. Total clients: ${clients.size}`);
+  });
+
+  ws.on('error', (err) => {
+    console.error('WebSocket error:', err);
+    clients.delete(ws);
+  });
+});
+
+// Broadcast message to all connected clients
+function broadcast(event, data) {
+  const message = JSON.stringify({ event, data, timestamp: new Date().toISOString() });
+  for (const client of clients) {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(message);
+    }
+  }
+}
 
 // Security: Disable X-Powered-By header to hide Express version
 app.disable('x-powered-by');
@@ -214,9 +250,13 @@ app.post('/api/run/:projectId', async (req, res) => {
   const safeGrep = sanitizeGrep(grep);
   res.json({ message: 'Tests started', projectId });
 
+  // Broadcast that tests are starting
+  broadcast('tests:started', { projectId, grep: safeGrep });
+
   // Run tests in background
   runTestsForProject(projectId, validation.project, safeGrep).catch(err => {
     console.error(`Error running tests for ${projectId}:`, err);
+    broadcast('tests:error', { projectId, error: err.message });
   });
 });
 
@@ -301,6 +341,10 @@ app.post('/api/upload/:projectId', async (req, res) => {
   );
 
   console.log(`Results uploaded for ${projectId}: ${run.stats.passed}/${run.stats.total} passed (source: ${run.source})`);
+
+  // Broadcast results uploaded
+  broadcast('results:uploaded', { projectId, run });
+
   res.json({ message: 'Results uploaded', run });
 });
 
@@ -426,6 +470,10 @@ async function runTestsForProject(projectId, config, grep) {
   );
 
   console.log(`Tests completed for ${projectId}: ${stats.passed}/${stats.total} passed`);
+
+  // Broadcast tests completed
+  broadcast('tests:completed', { projectId, run });
+
   return run;
 }
 
@@ -452,8 +500,9 @@ app.get('*', (req, res) => {
 
 // Start server only if run directly (not imported for testing)
 if (require.main === module) {
-  app.listen(PORT, () => {
+  server.listen(PORT, () => {
     console.log(`Playwright Dashboard running on http://localhost:${PORT}`);
+    console.log(`WebSocket server ready for connections`);
     ensureResultsDir();
 
     // Log discovered projects on startup
