@@ -250,7 +250,8 @@ function updateElapsedTimes() {
 
     const lastRunEl = card.querySelector('.last-run');
     if (lastRunEl && lastRunEl.getAttribute('data-running') === 'true') {
-      const elapsed = Math.floor((now - state.startTime) / 1000);
+      // Ensure elapsed is never negative (handles clock skew between server/client)
+      const elapsed = Math.max(0, Math.floor((now - state.startTime) / 1000));
       lastRunEl.textContent = `Running: ${formatElapsedTime(elapsed)}`;
     }
   }
