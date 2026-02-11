@@ -446,9 +446,12 @@ async function runTestsForProject(projectId, config, grep) {
       stdoutBuffer = lines.pop(); // Keep incomplete line in buffer
 
       for (const line of lines) {
-        // Detect failure indicators: "  1) [chromium]" or lines with red ANSI codes
+        // Strip ANSI escape codes for easier parsing
+        const cleanLine = line.replace(/\x1b\[[0-9;]*[a-zA-Z]|\[\d+[A-Za-z]/g, '');
+
+        // Detect failure indicators: "  1) [chromium]"
         // Playwright shows failures as numbered list: "1)", "2)", etc.
-        const failureMatch = line.match(/^\s*(\d+)\)\s+\[/);
+        const failureMatch = cleanLine.match(/^\s*(\d+)\)\s+\[/);
         if (failureMatch) {
           const failureNum = parseInt(failureMatch[1]);
           if (failureNum > progress.failed) {
@@ -461,7 +464,7 @@ async function runTestsForProject(projectId, config, grep) {
         }
 
         // Line reporter format: "[1/38] [chromium] › file.spec.ts:10:5 › test name"
-        const progressMatch = line.match(/\[(\d+)\/(\d+)\]/);
+        const progressMatch = cleanLine.match(/\[(\d+)\/(\d+)\]/);
         if (progressMatch) {
           const current = parseInt(progressMatch[1]);
           const total = parseInt(progressMatch[2]);
