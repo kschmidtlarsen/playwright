@@ -362,10 +362,13 @@ function renderSummaryCards() {
       </div>
       <div class="summary-card-footer">
         <span class="last-run" ${isRunning ? 'data-running="true"' : ''}>${footerText}</span>
-        <button class="btn btn-sm btn-primary run-btn ${isRunning ? 'running' : ''}"
+        ${project.canRunFromUI === false
+          ? `<button class="btn btn-sm btn-secondary run-btn" disabled title="Tests run via CI/CD pipeline">CI/CD Only</button>`
+          : `<button class="btn btn-sm btn-primary run-btn ${isRunning ? 'running' : ''}"
                 onclick="runTests('${project.id}')" ${isRunning ? 'disabled' : ''}>
-          ${isRunning ? 'Running...' : 'Run Tests'}
-        </button>
+              ${isRunning ? 'Running...' : 'Run Tests'}
+            </button>`
+        }
       </div>
     `;
 
