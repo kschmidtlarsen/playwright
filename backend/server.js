@@ -421,6 +421,7 @@ async function runTestsForProject(projectId, config, grep) {
 
   // Track progress
   const progress = { passed: 0, failed: 0, skipped: 0, completed: 0 };
+  const seenSkippedTests = new Set(); // Track test numbers we've counted as skipped
 
   // Use spawn with arguments array (no shell interpolation)
   const result = await new Promise((resolve) => {
@@ -432,7 +433,6 @@ async function runTestsForProject(projectId, config, grep) {
 
     let stdout = '';
     let stdoutBuffer = '';
-    let lastReportedCompleted = 0;
 
     // Line reporter outputs to stdout (along with JSON at the end)
     // Parse stdout for progress indicators like [1/38]
@@ -463,15 +463,35 @@ async function runTestsForProject(projectId, config, grep) {
           }
         }
 
-        // Detect skipped tests from summary line like "X skipped" or "- X skipped"
-        // Playwright shows skipped count in final summary
+        // Detect skipped tests - multiple patterns:
+        // 1. Summary line: "X skipped"
+        // 2. Individual skipped test with dash: "[N/M] -  [chromium]"
+        // 3. Line contains "skipped" after progress marker
         const skippedCountMatch = cleanLine.match(/(\d+)\s+skipped/i);
         if (skippedCountMatch) {
           const skippedNum = parseInt(skippedCountMatch[1]);
           if (skippedNum > progress.skipped) {
             progress.skipped = skippedNum;
             progress.passed = progress.completed - progress.failed - progress.skipped;
-            console.log(`[${projectId}] Skipped detected: ${progress.skipped} skipped`);
+            console.log(`[${projectId}] Skipped summary detected: ${progress.skipped} skipped`);
+            broadcast('tests:progress', { projectId, ...progress, expectedTotal });
+          }
+        }
+
+        // Detect individual skipped test: line with progress marker followed by "-" or contains "skipped"
+        // Format: "[N/M] -  [browser]" or "[N/M] ... skipped" or "-  [browser]"
+        // Extract test number to avoid double-counting
+        const skipProgressMatch = cleanLine.match(/\[(\d+)\/\d+\]/);
+        const isSkipLine = cleanLine.match(/\[\d+\/\d+\]\s*-\s+\[/) ||
+                           cleanLine.match(/^\s*-\s+\[.*\]\s+›/) ||
+                           (skipProgressMatch && cleanLine.toLowerCase().includes('skipped'));
+        if (isSkipLine && skipProgressMatch) {
+          const testNum = parseInt(skipProgressMatch[1]);
+          if (!seenSkippedTests.has(testNum)) {
+            seenSkippedTests.add(testNum);
+            progress.skipped = seenSkippedTests.size;
+            progress.passed = progress.completed - progress.failed - progress.skipped;
+            console.log(`[${projectId}] Individual skip detected (test #${testNum}): ${progress.skipped} skipped`);
             broadcast('tests:progress', { projectId, ...progress, expectedTotal });
           }
         }
