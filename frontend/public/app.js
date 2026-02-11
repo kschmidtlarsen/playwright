@@ -193,36 +193,8 @@ function handleResultsUploaded(data) {
 }
 
 function updateCardForRunning(projectId) {
-  const state = runningProjectState.get(projectId);
-  if (!state) return;
-
-  const card = document.querySelector(`[data-project-id="${projectId}"]`);
-  if (!card) return;
-
-  // Update status to "Running"
-  const statusEl = card.querySelector('.summary-card-status');
-  if (statusEl) {
-    statusEl.className = 'summary-card-status status-running';
-    statusEl.textContent = 'Running';
-  }
-
-  // Update stats to show 0 / expectedTotal
-  updateCardProgress(projectId, state);
-
-  // Update footer to show elapsed time
-  const lastRunEl = card.querySelector('.last-run');
-  if (lastRunEl) {
-    lastRunEl.setAttribute('data-running', 'true');
-    lastRunEl.textContent = 'Running: 0s';
-  }
-
-  // Update button
-  const btn = card.querySelector('.run-btn');
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = 'Running...';
-    btn.classList.add('running');
-  }
+  // Re-render all cards to show the running state with zeroed stats and progress bar
+  renderSummaryCards();
 }
 
 function updateCardProgress(projectId, state) {
