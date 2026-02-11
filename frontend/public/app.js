@@ -35,7 +35,7 @@ function connectWebSocket() {
   ws.onopen = () => {
     console.log('WebSocket connected');
     wsReconnectAttempts = 0;
-    showToast('Connected to live updates', 'success');
+    updateConnectionStatus(true);
   };
 
   ws.onmessage = (event) => {
@@ -49,6 +49,7 @@ function connectWebSocket() {
 
   ws.onclose = () => {
     console.log('WebSocket disconnected');
+    updateConnectionStatus(false);
     if (wsReconnectAttempts < WS_MAX_RECONNECT_ATTEMPTS) {
       wsReconnectAttempts++;
       console.log(`Reconnecting... attempt ${wsReconnectAttempts}`);
@@ -59,6 +60,15 @@ function connectWebSocket() {
   ws.onerror = (err) => {
     console.error('WebSocket error:', err);
   };
+}
+
+function updateConnectionStatus(connected) {
+  const statusEl = document.getElementById('connectionStatus');
+  if (statusEl) {
+    statusEl.classList.toggle('connected', connected);
+    statusEl.classList.toggle('disconnected', !connected);
+    statusEl.title = connected ? 'Connected - Real-time updates active' : 'Disconnected - Reconnecting...';
+  }
 }
 
 function handleWebSocketMessage(message) {

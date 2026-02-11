@@ -50,6 +50,31 @@ header h1 {
   font-weight: 600;
 }
 
+.header-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.connection-status {
+  font-size: 0.75rem;
+  animation: pulse 2s infinite;
+}
+
+.connection-status.connected {
+  color: var(--success);
+}
+
+.connection-status.disconnected {
+  color: var(--error);
+  animation: none;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
 .header-actions {
   display: flex;
   gap: 1rem;

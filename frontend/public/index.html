@@ -9,7 +9,10 @@
 <body>
   <div class="app">
     <header>
-      <h1>Playwright Dashboard</h1>
+      <div class="header-title">
+        <h1>Playwright Dashboard</h1>
+        <span id="connectionStatus" class="connection-status disconnected" title="Real-time updates">●</span>
+      </div>
       <div class="header-actions">
         <button id="runAllBtn" class="btn btn-primary">
           <span class="icon">▶</span> Run All Tests
