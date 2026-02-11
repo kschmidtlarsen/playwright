@@ -24,6 +24,7 @@ const PROJECT_PORTS = {
   'rental': 3002,
   'crossfit-repo': 3000,
   'ical-adjuster': 3020,
+  'calify': 3020,
   'kanban': 3010,
   'test-dashboard': 3030
 };
@@ -33,6 +34,7 @@ const PROJECT_NAMES = {
   'rental': 'Rental Platform',
   'crossfit-repo': 'CrossFit Generator',
   'ical-adjuster': 'iCal Adjuster',
+  'calify': 'Calify Calendar Transformer',
   'kanban': 'Kanban Board',
   'test-dashboard': 'Playwright Dashboard'
 };
