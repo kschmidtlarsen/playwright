@@ -553,6 +553,9 @@ async function runTestsForProject(projectId, config, grep) {
   // - skipped = programmatically skipped tests
   let stats;
 
+  // Debug: log raw Playwright stats
+  console.log(`[${projectId}] Raw Playwright results.stats:`, JSON.stringify(results.stats));
+
   if (results.stats && typeof results.stats.expected === 'number') {
     // Use Playwright's built-in stats summary
     stats = {
@@ -562,7 +565,7 @@ async function runTestsForProject(projectId, config, grep) {
       skipped: results.stats.skipped || 0,
       duration
     };
-    console.log(`Using Playwright summary stats: ${stats.passed} passed, ${stats.failed} failed, ${stats.skipped} skipped`);
+    console.log(`[${projectId}] Using Playwright summary stats: ${stats.passed} passed, ${stats.failed} failed, ${stats.skipped} skipped`);
   } else {
     // Fallback: count individual test results
     stats = {
