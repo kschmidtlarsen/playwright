@@ -1,0 +1,9 @@
+{
+  "name": "playwright-dashboard",
+  "version": "2.0.0",
+  "description": "Playwright Test Dashboard - Vercel deployment",
+  "private": true,
+  "dependencies": {
+    "pg": "^8.11.3"
+  }
+}
