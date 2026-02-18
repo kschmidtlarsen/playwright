@@ -1,19 +1,10 @@
 {
   "version": 2,
   "name": "playwright",
-  "functions": {
-    "api/index.js": {
-      "includeFiles": "backend/**"
-    }
-  },
   "rewrites": [
     {
-      "source": "/api/:path*",
-      "destination": "/api"
-    },
-    {
       "source": "/health",
-      "destination": "/api"
+      "destination": "/api/health"
     }
   ]
 }
