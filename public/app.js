@@ -1,6 +1,16 @@
 // API Base URL
 const API_BASE = window.location.origin;
 
+// GitHub repo name mapping (for repos where name differs from project ID)
+const GITHUB_REPO_MAP = {
+  'crossfit-generator': 'crossfit_generator'
+};
+
+// Get GitHub repo name for a project
+function getGitHubRepo(projectId) {
+  return GITHUB_REPO_MAP[projectId] || projectId;
+}
+
 // Polling configuration
 const POLL_INTERVAL = 30000; // 30 seconds
 let pollInterval = null;
@@ -152,7 +162,7 @@ function renderSummaryCards() {
       </div>
       <div class="summary-card-footer">
         <span class="last-run">${footerText}</span>
-        <a href="https://github.com/kschmidtlarsen/${project.id}/actions/workflows/e2e-manual.yml"
+        <a href="https://github.com/kschmidtlarsen/${getGitHubRepo(project.id)}/actions/workflows/e2e-manual.yml"
            target="_blank"
            class="btn btn-sm btn-primary run-btn"
            title="Run tests via GitHub Actions">
