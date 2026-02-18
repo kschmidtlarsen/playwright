@@ -1,21 +1,19 @@
 {
   "version": 2,
   "name": "playwright",
-  "buildCommand": "echo 'No build needed'",
-  "outputDirectory": "frontend/public",
   "functions": {
-    "backend/server.js": {
-      "runtime": "@vercel/node@3"
+    "api/index.js": {
+      "includeFiles": "backend/**"
     }
   },
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "/backend/server.js"
+      "destination": "/api"
     },
     {
       "source": "/health",
-      "destination": "/backend/server.js"
+      "destination": "/api"
     }
   ]
 }
