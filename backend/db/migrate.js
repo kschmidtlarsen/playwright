@@ -36,6 +36,7 @@ async function migrate() {
         stats_skipped INTEGER NOT NULL DEFAULT 0,
         stats_duration INTEGER NOT NULL DEFAULT 0,
         source VARCHAR(50) DEFAULT 'ci-upload',
+        test_scope VARCHAR(20) DEFAULT 'full',
         exit_code INTEGER DEFAULT 0,
         suites JSONB DEFAULT '[]'::jsonb,
         errors JSONB DEFAULT '[]'::jsonb,
@@ -50,6 +51,20 @@ async function migrate() {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_test_runs_timestamp ON test_runs(timestamp DESC)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_test_runs_project_timestamp ON test_runs(project_id, timestamp DESC)`);
     console.log('✓ Indexes created');
+
+    // Add test_scope column if it doesn't exist (migration for existing databases)
+    console.log('Checking for test_scope column...');
+    const columnCheck = await pool.query(`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_name = 'test_runs' AND column_name = 'test_scope'
+    `);
+    if (columnCheck.rows.length === 0) {
+      console.log('Adding test_scope column...');
+      await pool.query(`ALTER TABLE test_runs ADD COLUMN test_scope VARCHAR(20) DEFAULT 'full'`);
+      console.log('✓ test_scope column added');
+    } else {
+      console.log('✓ test_scope column already exists');
+    }
 
     // Create projects table
     console.log('Creating projects table...');

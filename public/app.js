@@ -132,14 +132,21 @@ function renderSummaryCards() {
     const failed = data.failed || 0;
     const skipped = data.skipped || 0;
     const total = data.total || 0;
+    const testScope = data.testScope || 'full';
 
     const footerText = data.lastRun ? `Last run: ${formatDate(data.lastRun.timestamp)}` : 'Last run: Never';
+    const scopeBadge = testScope === 'smoke' ?
+      '<span class="scope-badge smoke">Smoke</span>' :
+      '<span class="scope-badge full">Full</span>';
 
     card.innerHTML = `
       <div class="summary-card-header">
         <div class="summary-card-title-row">
           <span class="summary-card-title">${project.name}</span>
-          <span class="test-type-badge automated">⚡ E2E</span>
+          <div class="badge-row">
+            <span class="test-type-badge automated">⚡ E2E</span>
+            ${data.lastRun ? scopeBadge : ''}
+          </div>
         </div>
         <span class="summary-card-status ${statusClass}">
           ${statusText}
@@ -357,9 +364,15 @@ async function renderHistory() {
   for (const run of allHistory.slice(0, 10)) {
     const card = document.createElement('div');
     card.className = 'history-card';
+    const scopeBadge = run.testScope === 'smoke' ?
+      '<span class="scope-badge smoke">Smoke</span>' :
+      '<span class="scope-badge full">Full</span>';
     card.innerHTML = `
       <div class="history-card-header">
-        <span class="history-project">${run.project}</span>
+        <div class="history-title-row">
+          <span class="history-project">${run.project}</span>
+          ${scopeBadge}
+        </div>
         <span class="history-time">${formatDate(run.timestamp)}</span>
       </div>
       <div class="history-stats">

@@ -64,6 +64,7 @@ app.get('/api/results', async (req, res) => {
         stats_failed,
         stats_skipped,
         stats_duration,
+        test_scope,
         exit_code
       FROM test_runs
       ORDER BY project_id, timestamp DESC
@@ -82,6 +83,7 @@ app.get('/api/results', async (req, res) => {
         lastRun: {
           id: row.run_id,
           timestamp: row.timestamp,
+          testScope: row.test_scope || 'full',
           stats: {
             total: row.stats_total,
             passed: row.stats_passed,
@@ -94,6 +96,7 @@ app.get('/api/results', async (req, res) => {
         failed: row.stats_failed,
         skipped: row.stats_skipped,
         total: row.stats_total,
+        testScope: row.test_scope || 'full',
         status: row.stats_failed > 0 ? 'failed' : row.stats_passed > 0 ? 'passed' : 'unknown'
       };
     });
@@ -139,6 +142,7 @@ app.get('/api/results/:projectId', async (req, res) => {
         stats_skipped as skipped,
         stats_duration as duration,
         source,
+        test_scope,
         exit_code,
         suites,
         errors
@@ -163,6 +167,7 @@ app.get('/api/results/:projectId', async (req, res) => {
         duration: row.duration
       },
       source: row.source,
+      testScope: row.test_scope || 'full',
       exitCode: row.exit_code,
       suites: row.suites,
       errors: row.errors
@@ -197,6 +202,7 @@ app.get('/api/history/:projectId', async (req, res) => {
         stats_skipped as skipped,
         stats_duration as duration,
         source,
+        test_scope,
         exit_code
       FROM test_runs
       WHERE project_id = $1
@@ -215,6 +221,7 @@ app.get('/api/history/:projectId', async (req, res) => {
         duration: row.duration
       },
       source: row.source,
+      testScope: row.test_scope || 'full',
       exitCode: row.exit_code
     }));
 
@@ -233,11 +240,15 @@ app.post('/api/upload/:projectId', async (req, res) => {
     return res.status(400).json({ error: 'Invalid project ID' });
   }
 
-  const { stats, suites, errors, source } = req.body;
+  const { stats, suites, errors, source, testScope } = req.body;
 
   if (!stats || typeof stats !== 'object') {
     return res.status(400).json({ error: 'Invalid stats object' });
   }
+
+  // Validate testScope if provided
+  const validScopes = ['smoke', 'full'];
+  const scope = validScopes.includes(testScope) ? testScope : 'full';
 
   try {
     const runId = Date.now().toString();
@@ -246,8 +257,8 @@ app.post('/api/upload/:projectId', async (req, res) => {
       INSERT INTO test_runs (
         project_id, run_id, timestamp,
         stats_total, stats_passed, stats_failed, stats_skipped, stats_duration,
-        source, exit_code, suites, errors
-      ) VALUES ($1, $2, NOW(), $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        source, test_scope, exit_code, suites, errors
+      ) VALUES ($1, $2, NOW(), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
     `, [
       projectId,
       runId,
@@ -257,6 +268,7 @@ app.post('/api/upload/:projectId', async (req, res) => {
       stats.skipped || 0,
       stats.duration || 0,
       source || 'ci-upload',
+      scope,
       stats.failed > 0 ? 1 : 0,
       JSON.stringify(suites || []),
       JSON.stringify(errors || [])
@@ -292,10 +304,11 @@ app.post('/api/upload/:projectId', async (req, res) => {
         duration: stats.duration || 0
       },
       source: source || 'ci-upload',
+      testScope: scope,
       exitCode: stats.failed > 0 ? 1 : 0
     };
 
-    console.log(`Results uploaded for ${projectId}: ${run.stats.passed}/${run.stats.total} passed (source: ${run.source})`);
+    console.log(`Results uploaded for ${projectId}: ${run.stats.passed}/${run.stats.total} passed (source: ${run.source}, scope: ${scope})`);
 
     res.json({ message: 'Results uploaded', run });
   } catch (err) {

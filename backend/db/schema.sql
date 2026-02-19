@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS test_runs (
     stats_skipped INTEGER NOT NULL DEFAULT 0,
     stats_duration INTEGER NOT NULL DEFAULT 0,
     source VARCHAR(50) DEFAULT 'ci-upload',
+    test_scope VARCHAR(20) DEFAULT 'full',  -- 'smoke' or 'full'
     exit_code INTEGER DEFAULT 0,
     suites JSONB DEFAULT '[]'::jsonb,
     errors JSONB DEFAULT '[]'::jsonb,
