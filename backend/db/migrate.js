@@ -69,12 +69,13 @@ async function migrate() {
     console.log('Inserting default projects...');
     await pool.query(`
       INSERT INTO projects (id, name, base_url, port) VALUES
-        ('rental', 'Rental Platform', 'https://rental.exe.pm', 3002),
-        ('crossfit-generator', 'WODForge', 'https://crossfit.exe.pm', 3000),
-        ('calify', 'Calify', 'https://calify.exe.pm', 3020),
+        ('sorring-udlejning', 'Sorring Udlejning', 'https://sorringudlejning.dk', 3002),
+        ('wodforge', 'WODForge', 'https://wodforge.exe.pm', 3000),
+        ('calify', 'Calify', 'https://calify.it', 3020),
         ('kanban', 'Kanban Board', 'https://kanban.exe.pm', 3010),
-        ('grablist', 'Grablist', 'https://grablist.exe.pm', 3040),
-        ('sorring3d', 'Sorring 3D', 'https://sorring3d.exe.pm', 3050)
+        ('grablist', 'Grablist', 'https://grablist.org', 3040),
+        ('sorring3d', 'Sorring 3D', 'https://sorring3d.dk', 3050),
+        ('playwright', 'Playwright Dashboard', 'https://playwright.exe.pm', 3030)
       ON CONFLICT (id) DO NOTHING
     `);
     console.log('✓ Default projects inserted');

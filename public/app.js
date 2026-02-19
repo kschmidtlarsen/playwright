@@ -450,9 +450,600 @@ function showToast(message, type = 'info') {
   }, 3000);
 }
 
+// ============================================
+// Manual Testing Module
+// ============================================
+
+// Manual test state
+let manualChecklists = [];
+let currentSession = null;
+let pendingFailItem = null;
+
+// Manual test DOM elements (initialized in setupManualTestListeners)
+let manualTestSection = null;
+let manualStartView = null;
+let manualSessionView = null;
+let manualProjectSelect = null;
+let startManualTestBtn = null;
+let recentSessionsList = null;
+
+// Tab switching
+function setupTabs() {
+  const tabs = document.querySelectorAll('.nav-tab');
+  tabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      const targetTab = tab.dataset.tab;
+
+      // Update active tab
+      tabs.forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+
+      // Show/hide sections
+      const resultsSection = document.querySelector('.summary-section');
+      const detailsSection = document.querySelector('.details-section');
+      const historySection = document.querySelector('.history-section');
+      const manualSection = document.getElementById('manualTestSection');
+
+      if (targetTab === 'results') {
+        if (resultsSection) resultsSection.classList.remove('hidden');
+        if (detailsSection) detailsSection.classList.remove('hidden');
+        if (historySection) historySection.classList.remove('hidden');
+        if (manualSection) manualSection.classList.add('hidden');
+      } else if (targetTab === 'manual') {
+        if (resultsSection) resultsSection.classList.add('hidden');
+        if (detailsSection) detailsSection.classList.add('hidden');
+        if (historySection) historySection.classList.add('hidden');
+        if (manualSection) manualSection.classList.remove('hidden');
+        loadManualTestData();
+      }
+    });
+  });
+}
+
+// Load checklists and recent sessions
+async function loadManualTestData() {
+  try {
+    // Load available checklists
+    const checklistRes = await fetch(API_BASE + '/api/manual/checklists');
+    manualChecklists = await checklistRes.json();
+
+    // Populate project selector
+    if (manualProjectSelect) {
+      manualProjectSelect.innerHTML = '<option value="">-- Choose a project --</option>';
+      manualChecklists.forEach(c => {
+        manualProjectSelect.innerHTML += '<option value="' + c.projectId + '">' + c.projectName + ' (' + c.itemCount + ' items)</option>';
+      });
+    }
+
+    // Load recent sessions
+    const sessionsRes = await fetch(API_BASE + '/api/manual/sessions');
+    const sessions = await sessionsRes.json();
+    renderRecentSessions(sessions);
+  } catch (err) {
+    console.error('Failed to load manual test data:', err);
+    showToast('Failed to load manual test data', 'error');
+  }
+}
+
+// Render recent sessions list
+function renderRecentSessions(sessions) {
+  if (!recentSessionsList) return;
+
+  if (!sessions || sessions.length === 0) {
+    recentSessionsList.innerHTML = '<p class="empty-message">No recent sessions</p>';
+    return;
+  }
+
+  recentSessionsList.innerHTML = sessions.map(function(s) {
+    var statusClass = s.status === 'completed' ? 'completed' : 'in-progress';
+    var progress = s.totalItems > 0 ? Math.round(((s.passedItems + s.failedItems + s.skippedItems) / s.totalItems) * 100) : 0;
+
+    return '<div class="session-card ' + statusClass + '" onclick="resumeSession(\'' + s.sessionId + '\')">' +
+      '<div class="session-card-header">' +
+        '<span class="session-project">' + s.projectId + '</span>' +
+        '<span class="session-status">' + s.status + '</span>' +
+      '</div>' +
+      '<div class="session-card-stats">' +
+        '<span class="stat-passed">' + s.passedItems + '</span> / ' +
+        '<span class="stat-failed">' + s.failedItems + '</span> / ' +
+        '<span class="stat-skipped">' + s.skippedItems + '</span>' +
+      '</div>' +
+      '<div class="session-card-progress">' +
+        '<div class="progress-bar-bg">' +
+          '<div class="progress-bar-fill" style="width: ' + progress + '%"></div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="session-card-time">' + formatDate(s.startedAt) + '</div>' +
+    '</div>';
+  }).join('');
+}
+
+// Start new manual test session
+async function startManualTest() {
+  var projectId = manualProjectSelect.value;
+  if (!projectId) return;
+
+  try {
+    var res = await fetch(API_BASE + '/api/manual/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId: projectId })
+    });
+
+    if (!res.ok) {
+      var err = await res.json();
+      throw new Error(err.error || 'Failed to start session');
+    }
+
+    var session = await res.json();
+    showSessionView(session);
+    showToast('Session started', 'success');
+  } catch (err) {
+    console.error('Failed to start session:', err);
+    showToast(err.message, 'error');
+  }
+}
+
+// Resume existing session
+async function resumeSession(sessionId) {
+  try {
+    var res = await fetch(API_BASE + '/api/manual/sessions/' + sessionId);
+    if (!res.ok) throw new Error('Session not found');
+
+    var session = await res.json();
+    showSessionView(session);
+  } catch (err) {
+    console.error('Failed to resume session:', err);
+    showToast('Failed to resume session', 'error');
+  }
+}
+
+// Show session view with checklist
+function showSessionView(session) {
+  currentSession = session;
+
+  if (manualStartView) manualStartView.classList.add('hidden');
+  if (manualSessionView) manualSessionView.classList.remove('hidden');
+
+  // Update header
+  var projectNameEl = document.getElementById('sessionProjectName');
+  var sessionIdEl = document.getElementById('sessionId');
+  if (projectNameEl) projectNameEl.textContent = session.projectId;
+  if (sessionIdEl) sessionIdEl.textContent = 'Session: ' + session.sessionId;
+
+  updateSessionProgress();
+  renderChecklist();
+}
+
+// Update progress display
+function updateSessionProgress() {
+  if (!currentSession) return;
+
+  var passed = currentSession.passedItems || 0;
+  var failed = currentSession.failedItems || 0;
+  var skipped = currentSession.skippedItems || 0;
+  var total = currentSession.totalItems || 0;
+  var pending = total - passed - failed - skipped;
+
+  var passedEl = document.getElementById('sessionPassed');
+  var failedEl = document.getElementById('sessionFailed');
+  var skippedEl = document.getElementById('sessionSkipped');
+  var pendingEl = document.getElementById('sessionPending');
+  var progressBar = document.getElementById('sessionProgressBar');
+
+  if (passedEl) passedEl.textContent = passed;
+  if (failedEl) failedEl.textContent = failed;
+  if (skippedEl) skippedEl.textContent = skipped;
+  if (pendingEl) pendingEl.textContent = pending;
+
+  if (progressBar && total > 0) {
+    var passedPct = (passed / total) * 100;
+    var failedPct = (failed / total) * 100;
+    var skippedPct = (skipped / total) * 100;
+    progressBar.style.background = 'linear-gradient(to right, var(--success) 0%, var(--success) ' + passedPct + '%, var(--error) ' + passedPct + '%, var(--error) ' + (passedPct + failedPct) + '%, var(--warning) ' + (passedPct + failedPct) + '%, var(--warning) ' + (passedPct + failedPct + skippedPct) + '%, var(--bg-tertiary) ' + (passedPct + failedPct + skippedPct) + '%)';
+  }
+}
+
+// Render checklist items grouped by category
+function renderChecklist() {
+  var container = document.getElementById('checklistContainer');
+  if (!container || !currentSession || !currentSession.items) return;
+
+  // Group by category
+  var categories = {};
+  currentSession.items.forEach(function(item) {
+    var cat = item.category || 'Uncategorized';
+    if (!categories[cat]) categories[cat] = [];
+    categories[cat].push(item);
+  });
+
+  var html = '';
+  Object.keys(categories).forEach(function(catName) {
+    var items = categories[catName];
+    html += '<div class="checklist-category">';
+    html += '<h3 class="category-title">' + catName + '</h3>';
+    html += '<div class="category-items">';
+
+    items.forEach(function(item) {
+      var statusClass = 'status-' + item.status;
+      var isCustom = item.isCustom ? ' is-custom' : '';
+
+      html += '<div class="checklist-item ' + statusClass + isCustom + '" data-item-id="' + item.id + '">';
+      html += '<div class="item-content">';
+      html += '<span class="item-checkbox">' + getCheckboxIcon(item.status) + '</span>';
+      html += '<span class="item-title">' + item.title + '</span>';
+      if (item.isCustom) html += '<span class="custom-badge">Custom</span>';
+      html += '</div>';
+
+      if (item.status === 'failed' && item.errorDescription) {
+        html += '<div class="item-error">' + item.errorDescription + '</div>';
+      }
+
+      if (item.status === 'pending') {
+        html += '<div class="item-actions">';
+        html += '<button class="btn btn-sm btn-success" onclick="markItem(' + item.id + ', \'passed\')">Pass</button>';
+        html += '<button class="btn btn-sm btn-error" onclick="openFailModal(' + item.id + ', \'' + escapeHtml(item.title) + '\')">Fail</button>';
+        html += '<button class="btn btn-sm btn-secondary" onclick="markItem(' + item.id + ', \'skipped\')">Skip</button>';
+        html += '</div>';
+      }
+
+      html += '</div>';
+    });
+
+    html += '</div></div>';
+  });
+
+  container.innerHTML = html;
+}
+
+function getCheckboxIcon(status) {
+  switch (status) {
+    case 'passed': return '✓';
+    case 'failed': return '✗';
+    case 'skipped': return '○';
+    default: return '☐';
+  }
+}
+
+function escapeHtml(str) {
+  return str.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+}
+
+// Mark item as passed or skipped
+async function markItem(itemId, status) {
+  try {
+    var body = { status: status };
+
+    var res = await fetch(API_BASE + '/api/manual/items/' + itemId, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+
+    if (!res.ok) {
+      var err = await res.json();
+      throw new Error(err.error || 'Failed to update item');
+    }
+
+    // Update local state
+    var item = currentSession.items.find(function(i) { return i.id === itemId; });
+    if (item) {
+      var oldStatus = item.status;
+      item.status = status;
+
+      // Update counters
+      if (oldStatus === 'passed') currentSession.passedItems--;
+      if (oldStatus === 'failed') currentSession.failedItems--;
+      if (oldStatus === 'skipped') currentSession.skippedItems--;
+
+      if (status === 'passed') currentSession.passedItems++;
+      if (status === 'failed') currentSession.failedItems++;
+      if (status === 'skipped') currentSession.skippedItems++;
+    }
+
+    updateSessionProgress();
+    renderChecklist();
+  } catch (err) {
+    console.error('Failed to mark item:', err);
+    showToast(err.message, 'error');
+  }
+}
+
+// Open fail modal for error description
+function openFailModal(itemId, itemTitle) {
+  pendingFailItem = itemId;
+  var modal = document.getElementById('errorDescModal');
+  var titleEl = document.getElementById('failingItemTitle');
+  var descInput = document.getElementById('errorDescription');
+
+  if (titleEl) titleEl.textContent = itemTitle;
+  if (descInput) descInput.value = '';
+  if (modal) modal.classList.remove('hidden');
+}
+
+function closeErrorDescModal() {
+  pendingFailItem = null;
+  var modal = document.getElementById('errorDescModal');
+  if (modal) modal.classList.add('hidden');
+}
+
+// Confirm fail with description
+async function confirmFail() {
+  if (!pendingFailItem) return;
+
+  var descInput = document.getElementById('errorDescription');
+  var errorDescription = descInput ? descInput.value.trim() : '';
+
+  if (!errorDescription) {
+    showToast('Please describe the error', 'error');
+    return;
+  }
+
+  try {
+    var res = await fetch(API_BASE + '/api/manual/items/' + pendingFailItem, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'failed', errorDescription: errorDescription })
+    });
+
+    if (!res.ok) {
+      var err = await res.json();
+      throw new Error(err.error || 'Failed to update item');
+    }
+
+    // Update local state
+    var item = currentSession.items.find(function(i) { return i.id === pendingFailItem; });
+    if (item) {
+      var oldStatus = item.status;
+      item.status = 'failed';
+      item.errorDescription = errorDescription;
+
+      if (oldStatus === 'passed') currentSession.passedItems--;
+      if (oldStatus === 'skipped') currentSession.skippedItems--;
+      currentSession.failedItems++;
+    }
+
+    closeErrorDescModal();
+    updateSessionProgress();
+    renderChecklist();
+  } catch (err) {
+    console.error('Failed to mark item as failed:', err);
+    showToast(err.message, 'error');
+  }
+}
+
+// Add custom item modal
+function openAddItemModal() {
+  var modal = document.getElementById('addItemModal');
+  var catInput = document.getElementById('customItemCategory');
+  var titleInput = document.getElementById('customItemTitle');
+
+  if (catInput) catInput.value = '';
+  if (titleInput) titleInput.value = '';
+  if (modal) modal.classList.remove('hidden');
+}
+
+function closeAddItemModal() {
+  var modal = document.getElementById('addItemModal');
+  if (modal) modal.classList.add('hidden');
+}
+
+async function confirmAddItem() {
+  var catInput = document.getElementById('customItemCategory');
+  var titleInput = document.getElementById('customItemTitle');
+
+  var category = catInput ? catInput.value.trim() : 'Custom';
+  var title = titleInput ? titleInput.value.trim() : '';
+
+  if (!title) {
+    showToast('Please enter a test description', 'error');
+    return;
+  }
+
+  try {
+    var res = await fetch(API_BASE + '/api/manual/sessions/' + currentSession.sessionId + '/items', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category: category || 'Custom', title: title })
+    });
+
+    if (!res.ok) {
+      var err = await res.json();
+      throw new Error(err.error || 'Failed to add item');
+    }
+
+    var newItem = await res.json();
+    currentSession.items.push(newItem);
+    currentSession.totalItems++;
+
+    closeAddItemModal();
+    updateSessionProgress();
+    renderChecklist();
+    showToast('Item added', 'success');
+  } catch (err) {
+    console.error('Failed to add item:', err);
+    showToast(err.message, 'error');
+  }
+}
+
+// Complete session
+async function completeSession() {
+  if (!currentSession) return;
+
+  var pending = currentSession.totalItems - currentSession.passedItems - currentSession.failedItems - currentSession.skippedItems;
+
+  if (pending > 0) {
+    showToast('Complete all items before finishing', 'error');
+    return;
+  }
+
+  // Check for failed items
+  if (currentSession.failedItems > 0) {
+    showBugCardPreview();
+    return;
+  }
+
+  await finalizeSession();
+}
+
+// Show bug card preview
+function showBugCardPreview() {
+  var failedItems = currentSession.items.filter(function(i) { return i.status === 'failed'; });
+
+  // Group by category
+  var categories = {};
+  failedItems.forEach(function(item) {
+    var cat = item.category || 'Uncategorized';
+    if (!categories[cat]) categories[cat] = [];
+    categories[cat].push(item);
+  });
+
+  var previewText = document.getElementById('bugCardPreviewText');
+  var previewList = document.getElementById('bugCardPreviewList');
+
+  if (previewText) {
+    previewText.textContent = Object.keys(categories).length + ' bug card(s) will be created:';
+  }
+
+  if (previewList) {
+    var html = '';
+    Object.keys(categories).forEach(function(catName) {
+      var count = categories[catName].length;
+      html += '<div class="bug-card-preview-item">';
+      html += '<strong>' + catName + '</strong> - ' + count + ' failure' + (count > 1 ? 's' : '');
+      html += '</div>';
+    });
+    previewList.innerHTML = html;
+  }
+
+  var modal = document.getElementById('bugCardModal');
+  if (modal) modal.classList.remove('hidden');
+}
+
+function closeBugCardModal() {
+  var modal = document.getElementById('bugCardModal');
+  if (modal) modal.classList.add('hidden');
+}
+
+// Create bug cards and finalize
+async function createBugCardsAndFinalize() {
+  try {
+    var res = await fetch(API_BASE + '/api/manual/sessions/' + currentSession.sessionId + '/report', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+
+    if (!res.ok) {
+      var err = await res.json();
+      throw new Error(err.error || 'Failed to create bug cards');
+    }
+
+    var result = await res.json();
+    showToast(result.message, 'success');
+
+    closeBugCardModal();
+    await finalizeSession();
+  } catch (err) {
+    console.error('Failed to create bug cards:', err);
+    showToast(err.message, 'error');
+  }
+}
+
+async function finalizeSession() {
+  try {
+    var res = await fetch(API_BASE + '/api/manual/sessions/' + currentSession.sessionId, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'completed' })
+    });
+
+    if (!res.ok) {
+      var err = await res.json();
+      throw new Error(err.error || 'Failed to complete session');
+    }
+
+    showToast('Session completed!', 'success');
+
+    // Return to start view
+    currentSession = null;
+    if (manualSessionView) manualSessionView.classList.add('hidden');
+    if (manualStartView) manualStartView.classList.remove('hidden');
+    loadManualTestData();
+  } catch (err) {
+    console.error('Failed to finalize session:', err);
+    showToast(err.message, 'error');
+  }
+}
+
+// Setup manual test event listeners
+function setupManualTestListeners() {
+  manualTestSection = document.getElementById('manualTestSection');
+  manualStartView = document.getElementById('manualStartView');
+  manualSessionView = document.getElementById('manualSessionView');
+  manualProjectSelect = document.getElementById('manualProjectSelect');
+  startManualTestBtn = document.getElementById('startManualTestBtn');
+  recentSessionsList = document.getElementById('recentSessionsList');
+
+  // Enable start button when project selected
+  if (manualProjectSelect) {
+    manualProjectSelect.addEventListener('change', function() {
+      if (startManualTestBtn) {
+        startManualTestBtn.disabled = !manualProjectSelect.value;
+      }
+    });
+  }
+
+  // Start test button
+  if (startManualTestBtn) {
+    startManualTestBtn.addEventListener('click', startManualTest);
+  }
+
+  // Add custom item button
+  var addCustomItemBtn = document.getElementById('addCustomItemBtn');
+  if (addCustomItemBtn) {
+    addCustomItemBtn.addEventListener('click', openAddItemModal);
+  }
+
+  // Complete session button
+  var completeSessionBtn = document.getElementById('completeSessionBtn');
+  if (completeSessionBtn) {
+    completeSessionBtn.addEventListener('click', completeSession);
+  }
+
+  // Confirm fail button
+  var confirmFailBtn = document.getElementById('confirmFailBtn');
+  if (confirmFailBtn) {
+    confirmFailBtn.addEventListener('click', confirmFail);
+  }
+
+  // Confirm add item button
+  var confirmAddItemBtn = document.getElementById('confirmAddItemBtn');
+  if (confirmAddItemBtn) {
+    confirmAddItemBtn.addEventListener('click', confirmAddItem);
+  }
+
+  // Create bug cards button
+  var createBugCardsBtn = document.getElementById('createBugCardsBtn');
+  if (createBugCardsBtn) {
+    createBugCardsBtn.addEventListener('click', createBugCardsAndFinalize);
+  }
+
+  // Setup tabs
+  setupTabs();
+}
+
 // Make functions available globally
 window.toggleProject = toggleProject;
 window.toggleTestDetails = toggleTestDetails;
+window.markItem = markItem;
+window.openFailModal = openFailModal;
+window.closeErrorDescModal = closeErrorDescModal;
+window.closeBugCardModal = closeBugCardModal;
+window.closeAddItemModal = closeAddItemModal;
+window.resumeSession = resumeSession;
 
 // Initialize on load
-document.addEventListener('DOMContentLoaded', init);
+document.addEventListener('DOMContentLoaded', function() {
+  init();
+  setupManualTestListeners();
+});

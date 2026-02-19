@@ -13,6 +13,10 @@
         <h1>Playwright Dashboard</h1>
         <span id="connectionStatus" class="connection-status disconnected" title="Auto-refresh (30s polling)">●</span>
       </div>
+      <nav class="header-nav">
+        <button class="nav-tab active" data-tab="results">Results</button>
+        <button class="nav-tab" data-tab="manual">Manual Tests</button>
+      </nav>
       <div class="header-actions">
         <button id="runAllBtn" class="btn btn-primary">
           <span class="icon">▶</span> Run All Tests
@@ -53,6 +57,123 @@
         <h2>Run History</h2>
         <div id="historyContainer" class="history-container">
           <!-- History will be populated by JS -->
+        </div>
+      </section>
+
+      <!-- Manual Testing Section (hidden by default) -->
+      <section id="manualTestSection" class="manual-test-section hidden">
+        <div id="manualStartView" class="manual-start-view">
+          <h2>Start Manual Test Session</h2>
+          <div class="manual-start-form">
+            <div class="form-group">
+              <label for="manualProjectSelect">Select Project</label>
+              <select id="manualProjectSelect">
+                <option value="">-- Choose a project --</option>
+              </select>
+            </div>
+            <button id="startManualTestBtn" class="btn btn-primary" disabled>
+              Start Testing
+            </button>
+          </div>
+          <div class="recent-sessions">
+            <h3>Recent Sessions</h3>
+            <div id="recentSessionsList" class="sessions-list">
+              <!-- Recent sessions will be populated by JS -->
+            </div>
+          </div>
+        </div>
+
+        <div id="manualSessionView" class="manual-session-view hidden">
+          <div class="session-header">
+            <div class="session-info">
+              <h2 id="sessionProjectName">Project Name</h2>
+              <span id="sessionId" class="session-id"></span>
+            </div>
+            <div class="session-progress">
+              <div class="progress-stats">
+                <span class="stat-passed" id="sessionPassed">0</span> passed
+                <span class="stat-failed" id="sessionFailed">0</span> failed
+                <span class="stat-skipped" id="sessionSkipped">0</span> skipped
+                <span class="stat-pending" id="sessionPending">0</span> pending
+              </div>
+              <div class="progress-bar-wrapper">
+                <div class="progress-bar-bg">
+                  <div id="sessionProgressBar" class="session-progress-bar"></div>
+                </div>
+              </div>
+            </div>
+            <div class="session-actions">
+              <button id="addCustomItemBtn" class="btn btn-secondary btn-sm">+ Add Item</button>
+              <button id="completeSessionBtn" class="btn btn-primary">Complete Session</button>
+            </div>
+          </div>
+
+          <div id="checklistContainer" class="checklist-container">
+            <!-- Checklist items grouped by category -->
+          </div>
+        </div>
+
+        <!-- Bug Card Preview Modal -->
+        <div id="bugCardModal" class="modal hidden">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h3>Create Bug Cards</h3>
+              <button class="modal-close" onclick="closeBugCardModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+              <p id="bugCardPreviewText"></p>
+              <div id="bugCardPreviewList" class="bug-card-preview-list"></div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-secondary" onclick="closeBugCardModal()">Cancel</button>
+              <button id="createBugCardsBtn" class="btn btn-primary">Create Cards</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Add Custom Item Modal -->
+        <div id="addItemModal" class="modal hidden">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h3>Add Custom Test Item</h3>
+              <button class="modal-close" onclick="closeAddItemModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+              <div class="form-group">
+                <label for="customItemCategory">Category</label>
+                <input type="text" id="customItemCategory" placeholder="e.g., Custom Tests">
+              </div>
+              <div class="form-group">
+                <label for="customItemTitle">Test Description</label>
+                <input type="text" id="customItemTitle" placeholder="What should be tested?">
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-secondary" onclick="closeAddItemModal()">Cancel</button>
+              <button id="confirmAddItemBtn" class="btn btn-primary">Add Item</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Error Description Modal -->
+        <div id="errorDescModal" class="modal hidden">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h3>Describe the Failure</h3>
+              <button class="modal-close" onclick="closeErrorDescModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+              <p id="failingItemTitle" class="failing-item-title"></p>
+              <div class="form-group">
+                <label for="errorDescription">What went wrong?</label>
+                <textarea id="errorDescription" rows="4" placeholder="Describe the issue..."></textarea>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-secondary" onclick="closeErrorDescModal()">Cancel</button>
+              <button id="confirmFailBtn" class="btn btn-error">Mark as Failed</button>
+            </div>
+          </div>
         </div>
       </section>
     </main>
