@@ -543,7 +543,10 @@ function renderRecentSessions(sessions) {
 
     return '<div class="session-card ' + statusClass + '" onclick="resumeSession(\'' + s.sessionId + '\')">' +
       '<div class="session-card-header">' +
-        '<span class="session-project">' + s.projectId + '</span>' +
+        '<div class="session-card-title-row">' +
+          '<span class="session-project">' + s.projectId + '</span>' +
+          '<span class="test-type-badge manual">👤 Manual</span>' +
+        '</div>' +
         '<span class="session-status">' + s.status + '</span>' +
       '</div>' +
       '<div class="session-card-stats">' +

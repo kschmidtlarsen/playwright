@@ -778,14 +778,27 @@ section h2 {
   border-radius: 0.5rem;
   padding: 1rem;
   display: flex;
-  justify-content: space-between;
-  align-items: center;
+  flex-direction: column;
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .session-card:hover {
   border-color: var(--accent-primary);
+}
+
+.session-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  width: 100%;
+  margin-bottom: 0.5rem;
+}
+
+.session-card-title-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
 }
 
 .session-card-info {
