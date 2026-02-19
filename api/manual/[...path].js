@@ -155,10 +155,13 @@ module.exports = async (req, res) => {
     return res.status(200).end();
   }
 
-  // Handle path from Vercel - can be string or array
-  let pathParts = req.query.path || [];
+  // Handle path from Vercel - comes as req.query['...path'] (can be string or array)
+  let pathParts = req.query['...path'] || req.query.path || [];
   if (typeof pathParts === 'string') {
-    pathParts = [pathParts];
+    pathParts = pathParts.split('/').filter(p => p);
+  }
+  if (!Array.isArray(pathParts)) {
+    pathParts = [];
   }
   const route = '/' + pathParts.join('/');
 
