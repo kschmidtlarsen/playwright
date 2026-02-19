@@ -43,6 +43,30 @@ const SKIP_SECTIONS = [
   'Test Categories', 'Running Playwright Tests', 'Verification Plan'
 ];
 
+// Patterns to filter out from manual checklists (API/technical tests)
+const SKIP_ITEM_PATTERNS = [
+  /^`?(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s/i,
+  /^`?curl\s/i,
+  /returns?\s+\d{3}/i,
+  /api\s*endpoint/i
+];
+
+// Map checklist project IDs to Kanban project IDs
+const KANBAN_PROJECT_MAP = {
+  'playwright': 'e2e-test-dashboard',
+  'test-dashboard': 'e2e-test-dashboard',
+  'grablist': 'shopping-list',
+  'shopping-list': 'shopping-list',
+  'calify': 'ical-adjuster',
+  'ical-adjuster': 'ical-adjuster',
+  'sorring3d': 'sorring-3d',
+  'sorring-3d': 'sorring-3d',
+  'sorring-udlejning': 'rental',
+  'rental': 'rental',
+  'kanban': 'kanban',
+  'wodforge': 'wodforge'
+};
+
 function parseChecklist(content) {
   const lines = content.split('\n');
   const categories = [];
@@ -75,6 +99,10 @@ function parseChecklist(content) {
     const itemMatch = line.match(/^- \[ \] (.+)$/);
     if (itemMatch && currentCategory) {
       const title = itemMatch[1].trim();
+      // Skip items that match technical/API patterns
+      const shouldSkip = SKIP_ITEM_PATTERNS.some(pattern => pattern.test(title));
+      if (shouldSkip) continue;
+
       const fullCategory = currentSubcategory
         ? currentCategory + ' > ' + currentSubcategory
         : currentCategory;
@@ -468,6 +496,7 @@ module.exports = async (req, res) => {
         description += '- Passed: ' + totals.passed + '\n';
         description += '- Failed: ' + totals.failed + '\n';
         const cardTitle = 'BUG: ' + category + ' - ' + failCount + ' test failure' + (failCount > 1 ? 's' : '');
+        const kanbanProjectId = KANBAN_PROJECT_MAP[session.project_id] || session.project_id;
         try {
           const response = await fetch(KANBAN_API + '/cards', {
             method: 'POST',
@@ -475,7 +504,7 @@ module.exports = async (req, res) => {
             body: JSON.stringify({
               title: cardTitle,
               description: description,
-              projectId: session.project_id,
+              projectId: kanbanProjectId,
               columnId: 'backlog',
               priority: 'high',
               type: 'bug'
@@ -516,7 +545,38 @@ module.exports = async (req, res) => {
     const itemId = pathParts[1];
 
     if (req.method === 'PATCH') {
-      const { status, errorDescription } = req.body;
+      const { status, errorDescription, title } = req.body;
+
+      // If just updating title (no status change)
+      if (title !== undefined && status === undefined) {
+        if (!title || typeof title !== 'string' || title.trim().length === 0) {
+          return res.status(400).json({ error: 'Title cannot be empty' });
+        }
+        try {
+          const result = await pool.query(
+            'UPDATE manual_test_items SET title = $1 WHERE id = $2 RETURNING id, item_index, category, title, status, error_description, tested_at',
+            [title.trim(), itemId]
+          );
+          if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Item not found' });
+          }
+          const item = result.rows[0];
+          return res.json({
+            id: item.id,
+            index: item.item_index,
+            category: item.category,
+            title: item.title,
+            status: item.status,
+            errorDescription: item.error_description,
+            testedAt: item.tested_at
+          });
+        } catch (err) {
+          console.error('Error updating item title:', err);
+          return res.status(500).json({ error: 'Failed to update item' });
+        }
+      }
+
+      // Status update
       const validStatuses = ['pending', 'passed', 'failed', 'skipped'];
       if (!validStatuses.includes(status)) {
         return res.status(400).json({ error: 'Invalid status' });

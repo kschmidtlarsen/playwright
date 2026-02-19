@@ -697,13 +697,17 @@ function renderChecklist() {
         html += '<div class="item-error">' + item.errorDescription + '</div>';
       }
 
+      html += '<div class="item-actions">';
+      // Edit and delete buttons for all items
+      html += '<button class="btn btn-sm btn-icon" onclick="openEditItemModal(' + item.id + ', \'' + escapeHtml(item.title) + '\')" title="Edit">✏️</button>';
+      html += '<button class="btn btn-sm btn-icon" onclick="deleteItem(' + item.id + ', ' + (item.isCustom ? 'true' : 'false') + ')" title="Delete">🗑️</button>';
+
       if (item.status === 'pending') {
-        html += '<div class="item-actions">';
         html += '<button class="btn btn-sm btn-success" onclick="markItem(' + item.id + ', \'passed\')">Pass</button>';
         html += '<button class="btn btn-sm btn-error" onclick="openFailModal(' + item.id + ', \'' + escapeHtml(item.title) + '\')">Fail</button>';
         html += '<button class="btn btn-sm btn-secondary" onclick="markItem(' + item.id + ', \'skipped\')">Skip</button>';
-        html += '</div>';
       }
+      html += '</div>';
 
       html += '</div>';
     });
@@ -725,6 +729,106 @@ function getCheckboxIcon(status) {
 
 function escapeHtml(str) {
   return str.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+}
+
+// Edit item modal
+var pendingEditItem = null;
+
+function openEditItemModal(itemId, currentTitle) {
+  pendingEditItem = itemId;
+  var modal = document.getElementById('editItemModal');
+  var titleInput = document.getElementById('editItemTitle');
+
+  if (titleInput) titleInput.value = currentTitle.replace(/\\'/g, "'").replace(/&quot;/g, '"');
+  if (modal) modal.classList.remove('hidden');
+}
+
+function closeEditItemModal() {
+  pendingEditItem = null;
+  var modal = document.getElementById('editItemModal');
+  if (modal) modal.classList.add('hidden');
+}
+
+async function confirmEditItem() {
+  if (!pendingEditItem) return;
+
+  var titleInput = document.getElementById('editItemTitle');
+  var newTitle = titleInput ? titleInput.value.trim() : '';
+
+  if (!newTitle) {
+    showToast('Title cannot be empty', 'error');
+    return;
+  }
+
+  try {
+    var res = await fetch(API_BASE + '/api/manual/items/' + pendingEditItem, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: newTitle })
+    });
+
+    if (!res.ok) {
+      var err = await res.json();
+      throw new Error(err.error || 'Failed to update item');
+    }
+
+    // Update local state
+    var item = currentSession.items.find(function(i) { return i.id === pendingEditItem; });
+    if (item) {
+      item.title = newTitle;
+    }
+
+    closeEditItemModal();
+    renderChecklist();
+    showToast('Item updated', 'success');
+  } catch (err) {
+    console.error('Failed to update item:', err);
+    showToast(err.message, 'error');
+  }
+}
+
+// Delete item
+async function deleteItem(itemId, isCustom) {
+  var confirmMsg = isCustom
+    ? 'Delete this custom item? This cannot be undone.'
+    : 'Remove this item? (It will be marked as skipped)';
+
+  if (!confirm(confirmMsg)) return;
+
+  try {
+    var res = await fetch(API_BASE + '/api/manual/items/' + itemId, {
+      method: 'DELETE'
+    });
+
+    if (!res.ok) {
+      var err = await res.json();
+      throw new Error(err.error || 'Failed to delete item');
+    }
+
+    var result = await res.json();
+
+    // Update local state
+    if (result.deleted) {
+      currentSession.items = currentSession.items.filter(function(i) { return i.id !== itemId; });
+      currentSession.totalItems--;
+    } else if (result.skipped) {
+      var item = currentSession.items.find(function(i) { return i.id === itemId; });
+      if (item) {
+        var oldStatus = item.status;
+        item.status = 'skipped';
+        if (oldStatus === 'passed') currentSession.passedItems--;
+        if (oldStatus === 'failed') currentSession.failedItems--;
+        if (oldStatus !== 'skipped') currentSession.skippedItems++;
+      }
+    }
+
+    updateSessionProgress();
+    renderChecklist();
+    showToast(result.deleted ? 'Item deleted' : 'Item skipped', 'info');
+  } catch (err) {
+    console.error('Failed to delete item:', err);
+    showToast(err.message, 'error');
+  }
 }
 
 // Mark item as passed or skipped
@@ -1133,6 +1237,12 @@ function setupManualTestListeners() {
     confirmAddItemBtn.addEventListener('click', confirmAddItem);
   }
 
+  // Confirm edit item button
+  var confirmEditItemBtn = document.getElementById('confirmEditItemBtn');
+  if (confirmEditItemBtn) {
+    confirmEditItemBtn.addEventListener('click', confirmEditItem);
+  }
+
   // Create bug cards button
   var createBugCardsBtn = document.getElementById('createBugCardsBtn');
   if (createBugCardsBtn) {
@@ -1151,7 +1261,10 @@ window.openFailModal = openFailModal;
 window.closeErrorDescModal = closeErrorDescModal;
 window.closeBugCardModal = closeBugCardModal;
 window.closeAddItemModal = closeAddItemModal;
+window.closeEditItemModal = closeEditItemModal;
 window.resumeSession = resumeSession;
+window.openEditItemModal = openEditItemModal;
+window.deleteItem = deleteItem;
 
 // Initialize on load
 document.addEventListener('DOMContentLoaded', function() {

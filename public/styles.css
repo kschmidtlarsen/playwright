@@ -1245,6 +1245,19 @@ section h2 {
   display: none;
 }
 
+.btn-icon {
+  background: transparent;
+  border: none;
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+  opacity: 0.5;
+  transition: opacity 0.2s;
+}
+
+.btn-icon:hover {
+  opacity: 1;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
   header {
