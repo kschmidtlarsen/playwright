@@ -137,7 +137,10 @@ function renderSummaryCards() {
 
     card.innerHTML = `
       <div class="summary-card-header">
-        <span class="summary-card-title">${project.name}</span>
+        <div class="summary-card-title-row">
+          <span class="summary-card-title">${project.name}</span>
+          <span class="test-type-badge automated">⚡ E2E</span>
+        </div>
         <span class="summary-card-status ${statusClass}">
           ${statusText}
         </span>

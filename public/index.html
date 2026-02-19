@@ -14,8 +14,14 @@
         <span id="connectionStatus" class="connection-status disconnected" title="Auto-refresh (30s polling)">●</span>
       </div>
       <nav class="header-nav">
-        <button class="nav-tab active" data-tab="results">Results</button>
-        <button class="nav-tab" data-tab="manual">Manual Tests</button>
+        <button class="nav-tab active" data-tab="results">
+          <span class="tab-icon">⚡</span>
+          <span class="tab-label">Automated</span>
+        </button>
+        <button class="nav-tab" data-tab="manual">
+          <span class="tab-icon">👤</span>
+          <span class="tab-label">Manual</span>
+        </button>
       </nav>
       <div class="header-actions">
         <button id="runAllBtn" class="btn btn-primary">
@@ -29,7 +35,10 @@
 
     <main>
       <section class="summary-section">
-        <h2>Overview</h2>
+        <div class="section-header">
+          <h2><span class="section-icon">⚡</span> Automated E2E Tests</h2>
+          <p class="section-desc">Playwright tests run via GitHub Actions against production/preview environments</p>
+        </div>
         <div id="summaryCards" class="summary-cards">
           <!-- Cards will be populated by JS -->
         </div>
@@ -63,7 +72,10 @@
       <!-- Manual Testing Section (hidden by default) -->
       <section id="manualTestSection" class="manual-test-section hidden">
         <div id="manualStartView" class="manual-start-view">
-          <h2>Start Manual Test Session</h2>
+          <div class="section-header">
+            <h2><span class="section-icon">👤</span> Manual Test Sessions</h2>
+            <p class="section-desc">Human-driven testing with checklists - verify UX, visual elements, and edge cases</p>
+          </div>
           <div class="manual-start-form">
             <div class="form-group">
               <label for="manualProjectSelect">Select Project</label>
