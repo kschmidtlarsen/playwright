@@ -155,7 +155,11 @@ module.exports = async (req, res) => {
     return res.status(200).end();
   }
 
-  const pathParts = req.query.path || [];
+  // Handle path from Vercel - can be string or array
+  let pathParts = req.query.path || [];
+  if (typeof pathParts === 'string') {
+    pathParts = [pathParts];
+  }
   const route = '/' + pathParts.join('/');
 
   // Route: GET /checklists
