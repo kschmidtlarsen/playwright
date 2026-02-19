@@ -1,10 +1,18 @@
 const fs = require('fs');
 const path = require('path');
 
-const CHECKLISTS_DIR = process.env.CHECKLISTS_DIR ||
-  (fs.existsSync('/data/websites/.platform/test-checklists')
-    ? '/data/websites/.platform/test-checklists'
-    : path.join(__dirname, '../../../data/checklists'));
+// Try local dev path first, fallback to bundled checklists
+function getChecklistsDir() {
+  if (fs.existsSync('/data/websites/.platform/test-checklists')) {
+    return '/data/websites/.platform/test-checklists';
+  }
+  const bundledPath = path.join(process.cwd(), 'data/checklists');
+  if (fs.existsSync(bundledPath)) {
+    return bundledPath;
+  }
+  return path.join(__dirname, '../../../data/checklists');
+}
+const CHECKLISTS_DIR = process.env.CHECKLISTS_DIR || getChecklistsDir();
 
 const PROJECT_MAPPING = {
   'kanban': 'kanban.md',

@@ -2,10 +2,20 @@ const fs = require('fs');
 const path = require('path');
 
 // Try local dev path first, fallback to bundled checklists
-const CHECKLISTS_DIR = process.env.CHECKLISTS_DIR ||
-  (fs.existsSync('/data/websites/.platform/test-checklists')
-    ? '/data/websites/.platform/test-checklists'
-    : path.join(__dirname, '../../../data/checklists'));
+function getChecklistsDir() {
+  // Local dev environment
+  if (fs.existsSync('/data/websites/.platform/test-checklists')) {
+    return '/data/websites/.platform/test-checklists';
+  }
+  // Vercel serverless - checklists are bundled in data/checklists
+  const bundledPath = path.join(process.cwd(), 'data/checklists');
+  if (fs.existsSync(bundledPath)) {
+    return bundledPath;
+  }
+  // Fallback relative to this file
+  return path.join(__dirname, '../../../data/checklists');
+}
+const CHECKLISTS_DIR = process.env.CHECKLISTS_DIR || getChecklistsDir();
 
 const PROJECT_MAPPING = {
   'kanban': 'kanban.md',
